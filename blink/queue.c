@@ -23,8 +23,6 @@
 
 //=========================== defines ==========================================
 
-#define BLINK_PACKET_QUEUE_SIZE (8) // must be a power of 2
-
 typedef struct {
     uint8_t length;
     uint8_t buffer[BLINK_PACKET_MAX_SIZE];
