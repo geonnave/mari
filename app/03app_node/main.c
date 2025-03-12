@@ -63,14 +63,6 @@ int main(void)
         __SEV();
         __WFE();
         __WFE();
-
-        // if (blink_node_is_connected() && !node_vars.sent_one) {
-        //     blink_node_tx_payload(payload, payload_len);
-        //     node_vars.sent_one = true;
-
-        //     // // sleep for 500 ms
-        //     // bl_timer_hf_delay_ms(BLINK_APP_TIMER_DEV, 1000);
-        // }
     }
 }
 
@@ -78,28 +70,20 @@ int main(void)
 
 static void blink_event_callback(bl_event_t event, bl_event_data_t event_data) {
     switch (event) {
-        case BLINK_NEW_PACKET:
-            printf("New packet (%d B): ", event_data.data.new_packet.length);
-            for (int i = 0; i < event_data.data.new_packet.length; i++) {
-                printf("%02X ", event_data.data.new_packet.packet[i]);
-            }
-            printf("\n");
-
+        case BLINK_NEW_PACKET: {
             uint8_t *payload = event_data.data.new_packet.packet + sizeof(bl_packet_header_t);
             if (payload[0] == 0x80) {
-                printf("Received status query\n");
                 blink_node_tx_payload(payload_status, payload_status_len);
             } else if (payload[0] == 0x84) {
-                printf("Received start packet\n");
                 node_vars.chunk_count = 0;
                 blink_node_tx_payload(payload_fake_start_ack, payload_fake_start_ack_len);
             } else if (payload[0] == 0x85) {
-                printf("Received chunck packet\n");
                 node_vars.chunk_count++;
                 memcpy(payload_fake_chunck_ack + (payload_fake_chunck_ack_len - 4 - 1), &node_vars.chunk_count, 4);
                 blink_node_tx_payload(payload_fake_chunck_ack, payload_fake_chunck_ack_len);
             }
             break;
+        }
         case BLINK_CONNECTED: {
             uint64_t gateway_id = event_data.data.gateway_info.gateway_id;
             printf("Connected to gateway %016llX\n", gateway_id);
