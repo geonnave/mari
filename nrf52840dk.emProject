@@ -67,6 +67,7 @@
     gcc_omit_frame_pointer="Yes"
     gcc_optimization_level="Level 2 balanced" />
   <import file_name="drv/drv.emProject" />
+  <import file_name="sec/sec.emProject" />
   <import file_name="blink/blink.emProject" />
   <import file_name="app/app-drv-blink.emProject" />
   <import file_name="app/app-gateway.emProject" />

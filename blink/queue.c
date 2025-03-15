@@ -14,6 +14,7 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "lakers.h"
 #include "packet.h"
 #include "mac.h"
 #include "scheduler.h"
