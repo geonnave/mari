@@ -4,7 +4,7 @@
     Name="Common"
     build_output_directory="Output/$(BuildTarget)/$(Configuration)/Obj"
     build_output_file_name="$(OutDir)/$(ProjectName)-$(BuildTarget)$(LIB)"
-    linker_additional_files="liblakers_c.a"
+    c_additional_options="-Wno-error=unused-variable"
     c_user_include_directories="$(SolutionDir);$(SolutionDir)/../drv;$(PackagesDir)/nRF/Device/Include;$(PackagesDir)/CMSIS_5/CMSIS/Core/Include" />
   <project Name="02sec">
     <configuration
@@ -14,5 +14,6 @@
       project_type="Library" />
     <configuration
       Name="Debug" />
+    <file file_name="sec.c" />
   </project>
 </solution>
