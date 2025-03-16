@@ -19,7 +19,9 @@
 #include "lakers_shared.h"
 #include "lakers_ead_authz.h"
 
+#ifdef LAKERS_PSA
 extern void mbedtls_memory_buffer_alloc_init(uint8_t *buf, size_t len);
+#endif
 
 //=========================== defines ==========================================
 
@@ -56,31 +58,37 @@ static const BytesP256ElemLen I[2] = {
 };
 
 // --------for EAD authz -----
-static const uint8_t ID_U[2][4] __attribute__((unused)) = {
+static const uint8_t ID_U[2][4] = {
   {0xa1, 0x04, 0x41, 0x01},
   {0xa1, 0x04, 0x41, 0x02},
 };
 static const size_t ID_U_LEN = sizeof(ID_U[EDHOC_INITIATOR_INDEX]) / sizeof(ID_U[EDHOC_INITIATOR_INDEX][0]);
 static const BytesP256ElemLen G_W = {0xFF, 0xA4, 0xF1, 0x02, 0x13, 0x40, 0x29, 0xB3, 0xB1, 0x56, 0x89, 0x0B, 0x88, 0xC9, 0xD9, 0x61, 0x95, 0x01, 0x19, 0x65, 0x74, 0x17, 0x4D, 0xCB, 0x68, 0xA0, 0x7D, 0xB0, 0x58, 0x8E, 0x4D, 0x41};
-static const uint8_t LOC_W[] __attribute__((unused)) = "http://localhost:18000";
+static const uint8_t LOC_W[] = "http://localhost:18000";
 static const uint8_t LOC_W_LEN = (sizeof(LOC_W) / sizeof(LOC_W[0])) - 1; // -1 to discard the \0 at the end
 static const uint8_t SS = 2;
 
 // -------- crypto backend -----
+#ifdef LAKERS_PSA
 uint8_t mbedtls_buffer[4096 * 2] = {0};
+#endif
 
-static sec_vars_t sec_vars = { 0 };
+sec_vars_t sec_vars = { 0 };
 
 //=========================== prototypes =======================================
 
 //=========================== public ===========================================
 
 void bl_sec_init(void) {
+#ifdef LAKERS_PSA
     mbedtls_memory_buffer_alloc_init(mbedtls_buffer, 4096 * 2);
+#endif
 }
 
 int8_t bl_sec_edhoc_init(void) {
-    int8_t res = credential_new(&sec_vars.cred_i, CRED_I[EDHOC_INITIATOR_INDEX], sizeof(CRED_I[EDHOC_INITIATOR_INDEX]) / sizeof(CRED_I[EDHOC_INITIATOR_INDEX][0]));
+    int8_t res;
+
+    res = credential_new(&sec_vars.cred_i, CRED_I[EDHOC_INITIATOR_INDEX], sizeof(CRED_I[EDHOC_INITIATOR_INDEX]) / sizeof(CRED_I[EDHOC_INITIATOR_INDEX][0]));
     if (res != 0) {
         return res;
     }
@@ -98,16 +106,30 @@ int8_t bl_sec_edhoc_init(void) {
     return 0;
 }
 
-uint8_t bl_sec_edhoc_prepare_m1(uint8_t *msg_1) {
+uint8_t bl_sec_edhoc_prepare_m1(uint8_t *msg_1, uint8_t *msg1_len) {
     // prepare message_1 and ead_1
-    initiator_compute_ephemeral_secret(&sec_vars.initiator, &G_W, &sec_vars.authz_secret);
-    authz_device_prepare_ead_1(&sec_vars.device, &sec_vars.authz_secret, SS, &sec_vars.ead_1);
-    initiator_prepare_message_1(&sec_vars.initiator, NULL, &sec_vars.ead_1, &sec_vars.message_1);
+    int8_t res = initiator_compute_ephemeral_secret(&sec_vars.initiator, &G_W, &sec_vars.authz_secret);
+    if (res != 0) {
+        return res;
+    }
+
+    res = authz_device_prepare_ead_1(&sec_vars.device, &sec_vars.authz_secret, SS, &sec_vars.ead_1);
+    if (res != 0) {
+        return res;
+    }
+
+    res = initiator_prepare_message_1(&sec_vars.initiator, NULL, &sec_vars.ead_1, &sec_vars.message_1);
+    // res = initiator_prepare_message_1(&sec_vars.initiator, NULL, NULL, &sec_vars.message_1);
+    if (res != 0) {
+        return res;
+    }
 
     // save h_message_1 for later
     memcpy(sec_vars.device.wait_ead2.h_message_1, sec_vars.initiator.wait_m2.h_message_1, SHA256_DIGEST_LEN);
 
     // copy message_1 out
     memcpy(msg_1, sec_vars.message_1.content, sec_vars.message_1.len);
-    return sec_vars.message_1.len;
+    *msg1_len = sec_vars.message_1.len;
+
+    return 0;
 }

@@ -24,6 +24,6 @@
 
 void bl_sec_init(void);
 int8_t bl_sec_edhoc_init(void);
-uint8_t bl_sec_edhoc_prepare_m1(uint8_t *msg_1);
+uint8_t bl_sec_edhoc_prepare_m1(uint8_t *msg_1, uint8_t *msg1_len);
 
 #endif // __SEC_H
