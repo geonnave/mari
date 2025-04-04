@@ -15,9 +15,7 @@
 #include <stdbool.h>
 #include <string.h>
 
-#include "lakers.h"
-#include "lakers_shared.h"
-#include "lakers_ead_authz.h"
+#include "sec.h"
 
 #ifdef LAKERS_PSA
 extern void mbedtls_memory_buffer_alloc_init(uint8_t *buf, size_t len);
@@ -26,6 +24,8 @@ extern void mbedtls_memory_buffer_alloc_init(uint8_t *buf, size_t len);
 //=========================== defines ==========================================
 
 typedef struct {
+    bl_edhoc_state_t state;
+
     CredentialC cred_i, fetched_cred_r;
     IdCred id_cred_r;
     EdhocInitiator initiator;
@@ -83,6 +83,10 @@ void bl_sec_init(void) {
 #ifdef LAKERS_PSA
     mbedtls_memory_buffer_alloc_init(mbedtls_buffer, 4096 * 2);
 #endif
+}
+
+void bl_sec_edhoc_set_state(bl_edhoc_state_t state) {
+    sec_vars.state = state;
 }
 
 int8_t bl_sec_edhoc_init(void) {

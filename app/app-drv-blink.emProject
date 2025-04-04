@@ -28,7 +28,7 @@
   <project Name="00sec_edhoc">
     <configuration
       Name="Common"
-      project_dependencies="02sec(02sec)"
+      project_dependencies="02sec(02sec);00drv_bl_timer_hf(00drv)"
       project_directory="00sec_edhoc"
       linker_additional_files="$(ProjectDir)/../../sec/liblakers_c_dbg.a"
       c_additional_options="-Wno-error=unused-variable"
