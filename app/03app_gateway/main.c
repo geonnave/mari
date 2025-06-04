@@ -64,7 +64,7 @@ int main(void) {
 
     mr_timer_hf_set_periodic_us(MIRA_APP_TIMER_DEV, 1, 1000 * 1005, &_debug_print_stats);
 
-    mira_init(MIRA_GATEWAY, MIRA_NET_ID_DEFAULT, schedule_app, &mira_event_callback);
+    mira_init(MIRA_GATEWAY, 10, schedule_app, &mira_event_callback);
 
     while (1) {
         __SEV();

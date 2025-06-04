@@ -56,7 +56,7 @@ int main(void) {
 
     board_init();
 
-    mira_init(MIRA_NODE, MIRA_NET_ID_PATTERN_ANY, schedule_app, &mira_event_callback);
+    mira_init(MIRA_NODE, 10, schedule_app, &mira_event_callback);
 
     while (1) {
         __SEV();

@@ -11,11 +11,13 @@ all: node gateway
 node:
 	@echo "\e[1mBuilding $@ application\e[0m"
 	"$(SEGGER_DIR)/bin/emBuild" mira-node-nrf52840dk.emProject -project 03app_$@ -config $(BUILD_CONFIG) $(PACKAGES_DIR_OPT) -rebuild -verbose
+	@echo "\e[1mOutput binary: app/03app_node/Output/nrf52840dk/$(BUILD_CONFIG)/Exe/03app_node-nrf52840dk.bin\e[0m"
 	@echo "\e[1mDone\e[0m\n"
 
 gateway:
 	@echo "\e[1mBuilding $@ application\e[0m"
 	"$(SEGGER_DIR)/bin/emBuild" mira-gateway-nrf52840dk.emProject -project 03app_$@ -config $(BUILD_CONFIG) $(PACKAGES_DIR_OPT) -rebuild -verbose
+	@echo "\e[1mOutput binary: app/03app_gateway/Output/nrf52840dk/$(BUILD_CONFIG)/Exe/03app_gateway-nrf52840dk.bin\e[0m"
 	@echo "\e[1mDone\e[0m\n"
 
 clean-node:
