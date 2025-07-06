@@ -82,11 +82,11 @@ int main(void) {
 
         if (gateway_vars.uart_frame_ready) {
             gateway_vars.uart_frame_ready = false;
-            printf("Received payload: ");
-            for (size_t i = 0; i < gateway_vars.uart_frame_payload.length; i++) {
-                printf("%02X ", gateway_vars.uart_frame_payload.buffer[i]);
-            }
-            printf("\n");
+            // printf("Received payload: ");
+            // for (size_t i = 0; i < gateway_vars.uart_frame_payload.length; i++) {
+            //     printf("%02X ", gateway_vars.uart_frame_payload.buffer[i]);
+            // }
+            // printf("\n");
 
             uint8_t _uart_type = gateway_vars.uart_frame_payload.buffer[0];  // just ignore for now
             if (_uart_type != 0x01) {
@@ -101,6 +101,12 @@ int main(void) {
             header->src                = mr_device_id();
 
             mira_tx(mira_frame, mira_frame_len);
+        }
+
+        if (gateway_vars.mira_uart_frame_ready) {
+            gateway_vars.mira_uart_frame_ready = false;
+            gateway_vars.hdlc_frame.length     = db_hdlc_encode(gateway_vars.mira_uart_frame.buffer, gateway_vars.mira_uart_frame.length, gateway_vars.hdlc_frame.buffer);
+            mr_uart_write(MR_UART_INDEX, gateway_vars.hdlc_frame.buffer, gateway_vars.hdlc_frame.length);
         }
     }
 }
@@ -119,27 +125,37 @@ void uart_rx_callback(uint8_t data) {
 }
 
 void mira_event_callback(mr_event_t event, mr_event_data_t event_data) {
-    (void)event_data;
-    uint32_t now_ts_s = mr_timer_hf_now(MIRA_APP_TIMER_DEV) / 1000 / 1000;
-
-    // just send some dummy data
-    gateway_vars.packet.buffer[0]       = 0x42;  // 'B'
-    gateway_vars.packet.buffer[1]       = 0x42;  // 'B'
-    gateway_vars.packet.buffer[2]       = 0x42;  // 'B'
-    gateway_vars.packet.length          = 3;
-    gateway_vars.mira_uart_frame.length = db_hdlc_encode(gateway_vars.packet.buffer, gateway_vars.packet.length, gateway_vars.mira_uart_frame.buffer);
-    mr_uart_write(MR_UART_INDEX, gateway_vars.mira_uart_frame.buffer, gateway_vars.mira_uart_frame.length);
-
     switch (event) {
         case MIRA_NEW_PACKET:
         {
+            gateway_vars.mira_uart_frame.buffer[0] = MIRA_EDGE_DATA;
+            memcpy(gateway_vars.mira_uart_frame.buffer + 1, event_data.data.new_packet.header, sizeof(mr_packet_header_t));
+            memcpy(gateway_vars.mira_uart_frame.buffer + 1 + sizeof(mr_packet_header_t), event_data.data.new_packet.payload, event_data.data.new_packet.payload_len);
+            gateway_vars.mira_uart_frame.length = sizeof(mr_packet_header_t) + event_data.data.new_packet.payload_len;
+            gateway_vars.mira_uart_frame_ready  = true;
+            break;
+        }
+        case MIRA_KEEPALIVE:
+        {
+            gateway_vars.mira_uart_frame.buffer[0] = MIRA_EDGE_KEEPALIVE;
+            memcpy(gateway_vars.mira_uart_frame.buffer + 1, &event_data.data.node_info.node_id, sizeof(uint64_t));
+            gateway_vars.mira_uart_frame.length = 1 + sizeof(uint64_t);
+            gateway_vars.mira_uart_frame_ready  = true;
             break;
         }
         case MIRA_NODE_JOINED:
-            printf("%d New node joined: %016llX  (%d nodes connected)\n", now_ts_s, event_data.data.node_info.node_id, mira_gateway_count_nodes());
+            puts("#");
+            gateway_vars.mira_uart_frame.buffer[0] = MIRA_EDGE_NODE_JOINED;
+            memcpy(gateway_vars.mira_uart_frame.buffer + 1, &event_data.data.node_info.node_id, sizeof(uint64_t));
+            gateway_vars.mira_uart_frame.length = 1 + sizeof(uint64_t);
+            gateway_vars.mira_uart_frame_ready  = true;
             break;
         case MIRA_NODE_LEFT:
-            printf("%d Node left: %016llX, reason: %u  (%d nodes connected)\n", now_ts_s, event_data.data.node_info.node_id, event_data.tag, mira_gateway_count_nodes());
+            puts("0");
+            gateway_vars.mira_uart_frame.buffer[0] = MIRA_EDGE_NODE_LEFT;
+            memcpy(gateway_vars.mira_uart_frame.buffer + 1, &event_data.data.node_info.node_id, sizeof(uint64_t));
+            gateway_vars.mira_uart_frame.length = 1 + sizeof(uint64_t);
+            gateway_vars.mira_uart_frame_ready  = true;
             break;
         case MIRA_ERROR:
             printf("Error, reason: %u\n", event_data.tag);
