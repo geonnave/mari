@@ -35,7 +35,15 @@ void _setup_debug_pins(void);
 int main(void) {
     printf("Hello Mira Gateway App Core (UART) %016llX\n", mr_device_id());
 
+    // Configure all GPIOs as non secure
+    NRF_SPU_S->GPIOPORT[0].PERM = 0;
+    NRF_SPU_S->GPIOPORT[1].PERM = 0;
+
     _setup_debug_pins();
+
+    // Assign UART RX and TX pins to the network core
+    NRF_P1_S->PIN_CNF[0] = GPIO_PIN_CNF_MCUSEL_NetworkMCU << GPIO_PIN_CNF_MCUSEL_Pos;
+    NRF_P1_S->PIN_CNF[1] = GPIO_PIN_CNF_MCUSEL_NetworkMCU << GPIO_PIN_CNF_MCUSEL_Pos;
 
     // TODO: communicate with the network core via IPC, and make sure we start the network core
 
@@ -67,8 +75,4 @@ void _setup_debug_pins(void) {
     NRF_P1_S->PIN_CNF[3] = GPIO_PIN_CNF_MCUSEL_NetworkMCU << GPIO_PIN_CNF_MCUSEL_Pos;
     NRF_P1_S->PIN_CNF[4] = GPIO_PIN_CNF_MCUSEL_NetworkMCU << GPIO_PIN_CNF_MCUSEL_Pos;
     NRF_P1_S->PIN_CNF[5] = GPIO_PIN_CNF_MCUSEL_NetworkMCU << GPIO_PIN_CNF_MCUSEL_Pos;
-
-    // Configure all GPIOs as non secure
-    NRF_SPU_S->GPIOPORT[0].PERM = 0;
-    NRF_SPU_S->GPIOPORT[1].PERM = 0;
 }

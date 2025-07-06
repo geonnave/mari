@@ -94,13 +94,6 @@ assoc_vars_t assoc_vars = { 0 };
 
 void mr_assoc_init(uint16_t net_id, mr_event_cb_t event_callback) {
 #ifdef DEBUG
-#ifdef NRF5340_XXAA
-    // Wait a bit to ensure application core has set up GPIO permissions
-    // FIXME: replace with proper IPC handshake
-    for (volatile int i = 0; i < 1000000; i++) {
-        __NOP();
-    }
-#endif
     mr_gpio_init(&led0, MR_GPIO_OUT);
     mr_gpio_init(&led1, MR_GPIO_OUT);
     mr_gpio_init(&led2, MR_GPIO_OUT);
