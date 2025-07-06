@@ -20,6 +20,8 @@
 
 //=========================== defines ==========================================
 
+#define MIRA_APP_TIMER_DEV 1
+
 typedef struct {
     bool dummy;
 } gateway_app_vars_t;
@@ -28,7 +30,7 @@ typedef struct {
 
 gateway_app_vars_t gateway_app_vars = { 0 };
 
-extern volatile __attribute__((section(".shared_data"))) ipc_shared_data_t ipc_shared_data;
+extern volatile __attribute__((section(".shared_data"))) mr_ipc_shared_data_t ipc_shared_data;
 
 //=========================== prototypes =======================================
 
@@ -41,6 +43,10 @@ int main(void) {
     printf("Hello Mira Gateway App Core (UART) %016llX\n", mr_device_id());
 
     setup_debug_pins();
+
+    mr_timer_hf_init(MIRA_APP_TIMER_DEV);
+
+    mr_timer_hf_set_periodic_us(MIRA_APP_TIMER_DEV, 2, mr_scheduler_get_duration_us(), &mira_event_loop);
 
     // TODO: communicate with the network core via IPC, and make sure we start the network core
 
@@ -63,6 +69,26 @@ int main(void) {
 }
 
 //=========================== callbacks ========================================
+
+void mira_event_callback(mr_event_t event, mr_event_data_t event_data) {
+    switch (event) {
+        case MIRA_NEW_PACKET:
+        {
+            break;
+        }
+        case MIRA_NODE_JOINED:
+            printf("New node joined: %016llX  (%d nodes connected)\n", event_data.data.node_info.node_id, mira_gateway_count_nodes());
+            break;
+        case MIRA_NODE_LEFT:
+            printf("Node left: %016llX, reason: %u  (%d nodes connected)\n", event_data.data.node_info.node_id, event_data.tag, mira_gateway_count_nodes());
+            break;
+        case MIRA_ERROR:
+            printf("Error, reason: %u\n", event_data.tag);
+            break;
+        default:
+            break;
+    }
+}
 
 //=========================== private ========================================
 

@@ -25,7 +25,7 @@
 
 static mr_radio_cb_t _radio_callback = NULL;
 
-extern volatile __attribute__((section(".shared_data"))) ipc_shared_data_t ipc_shared_data;
+extern volatile __attribute__((section(".shared_data"))) mr_ipc_shared_data_t ipc_shared_data;
 
 //=========================== public ===========================================
 

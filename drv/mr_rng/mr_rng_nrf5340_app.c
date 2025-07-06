@@ -21,7 +21,7 @@
 void swarmit_init_rng(void);
 void swarmit_read_rng(uint8_t *value);
 #else
-extern volatile __attribute__((section(".shared_data"))) ipc_shared_data_t ipc_shared_data;
+extern volatile __attribute__((section(".shared_data"))) mr_ipc_shared_data_t ipc_shared_data;
 #endif
 
 //=========================== public ===========================================

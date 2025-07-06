@@ -75,7 +75,7 @@ __attribute__ ((weak, alias("dummy_handler"))) void KMU_IRQHandler(void);
 __attribute__ ((weak, alias("dummy_handler"))) void CRYPTOCELL_IRQHandler(void);
 
 #ifndef NO_IPC
-volatile __attribute__((section(".shared_data"))) ipc_shared_data_t ipc_shared_data;
+volatile __attribute__((section(".shared_data"))) mr_ipc_shared_data_t ipc_shared_data;
 
 void mr_ipc_network_call(ipc_req_t req) {
     if (req != MR_IPC_REQ_NONE) {
