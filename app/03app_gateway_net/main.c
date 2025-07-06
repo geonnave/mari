@@ -21,11 +21,14 @@
 #include "mira.h"
 
 #include "uart.h"
+#include "hdlc.h"
 
 //=========================== defines ==========================================
 
-#define MR_UART_INDEX      (0)     ///< Index of UART peripheral to use
-#define BUFFER_MAX_BYTES   (255U)  ///< Max bytes in UART receive buffer
+#define MR_UART_INDEX (0)  ///< Index of UART peripheral to use
+// #define MR_UART_BAUDRATE   (1000000)  ///< Baudrate of UART peripheral
+#define MR_UART_BAUDRATE   (115200)  ///< Baudrate of UART peripheral
+#define BUFFER_MAX_BYTES   (255U)    ///< Max bytes in UART receive buffer
 #define MIRA_APP_TIMER_DEV 1
 
 typedef struct {
@@ -35,6 +38,7 @@ typedef struct {
 
 typedef struct {
     gateway_packet_t packet;
+    gateway_packet_t hdlc_packet;
 } gateway_vars_t;
 
 //=========================== variables ========================================
@@ -63,7 +67,7 @@ int main(void) {
 
     mr_timer_hf_set_periodic_us(MIRA_APP_TIMER_DEV, 2, mr_scheduler_get_duration_us(), &mira_event_loop);
 
-    mr_uart_init(MR_UART_INDEX, &mr_uart_rx, &mr_uart_tx, 1000000, &uart_rx_callback);
+    mr_uart_init(MR_UART_INDEX, &mr_uart_rx, &mr_uart_tx, MR_UART_BAUDRATE, &uart_rx_callback);
 
     while (1) {
         __SEV();
@@ -75,7 +79,18 @@ int main(void) {
 //=========================== callbacks ========================================
 
 void uart_rx_callback(uint8_t data) {
-    printf("Received: %c\n", data);
+    // printf("Received: %02X - %c\n", data, data);
+
+    db_hdlc_state_t state = db_hdlc_rx_byte(data);
+    if (state == DB_HDLC_STATE_READY) {
+        uint8_t payload[BUFFER_MAX_BYTES];
+        size_t  payload_length = db_hdlc_decode(payload);
+        printf("Received payload: ");
+        for (size_t i = 0; i < payload_length; i++) {
+            printf("%02X ", payload[i]);
+        }
+        printf("\n");
+    }
 }
 
 void mira_event_callback(mr_event_t event, mr_event_data_t event_data) {
@@ -83,9 +98,12 @@ void mira_event_callback(mr_event_t event, mr_event_data_t event_data) {
     uint32_t now_ts_s = mr_timer_hf_now(MIRA_APP_TIMER_DEV) / 1000 / 1000;
 
     // just send some dummy data
-    gateway_vars.packet.buffer[0] = 0xFE;
-    gateway_vars.packet.length    = 1;
-    mr_uart_write(MR_UART_INDEX, gateway_vars.packet.buffer, gateway_vars.packet.length);
+    gateway_vars.packet.buffer[0]   = 0x42;  // 'B'
+    gateway_vars.packet.buffer[1]   = 0x42;  // 'B'
+    gateway_vars.packet.buffer[2]   = 0x42;  // 'B'
+    gateway_vars.packet.length      = 3;
+    gateway_vars.hdlc_packet.length = db_hdlc_encode(gateway_vars.packet.buffer, gateway_vars.packet.length, gateway_vars.hdlc_packet.buffer);
+    mr_uart_write(MR_UART_INDEX, gateway_vars.hdlc_packet.buffer, gateway_vars.hdlc_packet.length);
 
     switch (event) {
         case MIRA_NEW_PACKET:
