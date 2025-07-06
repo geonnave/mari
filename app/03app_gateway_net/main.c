@@ -11,6 +11,7 @@
  */
 #include <nrf.h>
 #include <stdio.h>
+#include <stdbool.h>
 
 #include "mr_device.h"
 #include "mr_radio.h"
@@ -25,10 +26,10 @@
 
 //=========================== defines ==========================================
 
-#define MR_UART_INDEX (0)  ///< Index of UART peripheral to use
-// #define MR_UART_BAUDRATE   (1000000)  ///< Baudrate of UART peripheral
-#define MR_UART_BAUDRATE   (115200)  ///< Baudrate of UART peripheral
-#define BUFFER_MAX_BYTES   (255U)    ///< Max bytes in UART receive buffer
+#define MR_UART_INDEX    (0)        ///< Index of UART peripheral to use
+#define MR_UART_BAUDRATE (1000000)  ///< Baudrate of UART peripheral
+// #define MR_UART_BAUDRATE   (115200)  ///< Baudrate of UART peripheral
+#define BUFFER_MAX_BYTES   (255U)  ///< Max bytes in UART receive buffer
 #define MIRA_APP_TIMER_DEV 1
 
 typedef struct {
@@ -38,7 +39,12 @@ typedef struct {
 
 typedef struct {
     gateway_packet_t packet;
-    gateway_packet_t hdlc_packet;
+    gateway_packet_t mira_uart_frame;
+    bool             mira_uart_frame_ready;
+    gateway_packet_t hdlc_frame;
+    bool             hdlc_frame_ready;
+    gateway_packet_t uart_frame_payload;
+    bool             uart_frame_ready;
 } gateway_vars_t;
 
 //=========================== variables ========================================
@@ -73,23 +79,42 @@ int main(void) {
         __SEV();
         __WFE();
         __WFE();
+
+        if (gateway_vars.uart_frame_ready) {
+            gateway_vars.uart_frame_ready = false;
+            printf("Received payload: ");
+            for (size_t i = 0; i < gateway_vars.uart_frame_payload.length; i++) {
+                printf("%02X ", gateway_vars.uart_frame_payload.buffer[i]);
+            }
+            printf("\n");
+
+            uint8_t _uart_type = gateway_vars.uart_frame_payload.buffer[0];  // just ignore for now
+            if (_uart_type != 0x01) {
+                printf("Invalid UART packet type: %02X\n", _uart_type);
+                continue;
+            }
+
+            uint8_t *mira_frame     = gateway_vars.uart_frame_payload.buffer + 1;
+            uint8_t  mira_frame_len = gateway_vars.uart_frame_payload.length - 1;
+
+            mr_packet_header_t *header = (mr_packet_header_t *)mira_frame;
+            header->src                = mr_device_id();
+
+            mira_tx(mira_frame, mira_frame_len);
+        }
     }
 }
 
 //=========================== callbacks ========================================
 
+// TODO: move decoding logic out of isr context
 void uart_rx_callback(uint8_t data) {
     // printf("Received: %02X - %c\n", data, data);
 
     db_hdlc_state_t state = db_hdlc_rx_byte(data);
     if (state == DB_HDLC_STATE_READY) {
-        uint8_t payload[BUFFER_MAX_BYTES];
-        size_t  payload_length = db_hdlc_decode(payload);
-        printf("Received payload: ");
-        for (size_t i = 0; i < payload_length; i++) {
-            printf("%02X ", payload[i]);
-        }
-        printf("\n");
+        gateway_vars.uart_frame_payload.length = db_hdlc_decode(gateway_vars.uart_frame_payload.buffer);
+        gateway_vars.uart_frame_ready          = true;
     }
 }
 
@@ -98,12 +123,12 @@ void mira_event_callback(mr_event_t event, mr_event_data_t event_data) {
     uint32_t now_ts_s = mr_timer_hf_now(MIRA_APP_TIMER_DEV) / 1000 / 1000;
 
     // just send some dummy data
-    gateway_vars.packet.buffer[0]   = 0x42;  // 'B'
-    gateway_vars.packet.buffer[1]   = 0x42;  // 'B'
-    gateway_vars.packet.buffer[2]   = 0x42;  // 'B'
-    gateway_vars.packet.length      = 3;
-    gateway_vars.hdlc_packet.length = db_hdlc_encode(gateway_vars.packet.buffer, gateway_vars.packet.length, gateway_vars.hdlc_packet.buffer);
-    mr_uart_write(MR_UART_INDEX, gateway_vars.hdlc_packet.buffer, gateway_vars.hdlc_packet.length);
+    gateway_vars.packet.buffer[0]       = 0x42;  // 'B'
+    gateway_vars.packet.buffer[1]       = 0x42;  // 'B'
+    gateway_vars.packet.buffer[2]       = 0x42;  // 'B'
+    gateway_vars.packet.length          = 3;
+    gateway_vars.mira_uart_frame.length = db_hdlc_encode(gateway_vars.packet.buffer, gateway_vars.packet.length, gateway_vars.mira_uart_frame.buffer);
+    mr_uart_write(MR_UART_INDEX, gateway_vars.mira_uart_frame.buffer, gateway_vars.mira_uart_frame.length);
 
     switch (event) {
         case MIRA_NEW_PACKET:
