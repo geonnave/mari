@@ -39,6 +39,9 @@ int main(void) {
 
     // TODO: communicate with the network core via IPC, and make sure we start the network core
 
+    // Release the network core
+    NRF_RESET_S->NETWORK.FORCEOFF = 0;
+
     // TODO: communicate with an external device via UART (e.g. a computer or raspberry pi)
 
     while (1) {
