@@ -236,6 +236,7 @@ void mira_event_loop(void) {
     switch (mira_get_node_type()) {
         case MIRA_GATEWAY:
             mr_bloom_gateway_event_loop();
+            mr_assoc_gateway_clear_old_nodes(mr_mac_get_asn());
             break;
         case MIRA_NODE:
             break;

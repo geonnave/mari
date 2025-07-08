@@ -242,7 +242,6 @@ static void new_slot_synced(void) {
     // perform timeout checks
     if (mira_get_node_type() == MIRA_GATEWAY) {
         // too long without receiving a packet from certain nodes? disconnect them
-        mr_assoc_gateway_clear_old_nodes(mac_vars.asn);
     } else if (mira_get_node_type() == MIRA_NODE) {
         if (mr_assoc_node_should_leave(mac_vars.asn)) {
             // assoc module determined that the node should leave, so disconnect and back to scanning
