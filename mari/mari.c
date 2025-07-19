@@ -243,6 +243,7 @@ void mari_event_loop(void) {
             mr_bloom_gateway_event_loop();
             break;
         case MARI_NODE:
+            mr_sec_edhoc_event_loop();
             break;
     }
 }

@@ -25,6 +25,7 @@ extern void mbedtls_memory_buffer_alloc_init(uint8_t *buf, size_t len);
 
 typedef struct {
     mr_edhoc_state_t state;
+    int8_t edhoc_res;
 
     CredentialC    cred_i, fetched_cred_r;
     IdCred         id_cred_r;
@@ -32,6 +33,7 @@ typedef struct {
 
     // used during execution of EDHOC
     EdhocMessageBuffer message_1;
+    uint8_t            message_1_len;
     uint8_t            c_r;
     EdhocMessageBuffer message_2;
     EdhocMessageBuffer message_3;
@@ -137,4 +139,33 @@ uint8_t mr_sec_edhoc_prepare_m1(uint8_t *msg_1, uint8_t *msg1_len) {
     *msg1_len = sec_vars.message_1.len;
 
     return 0;
+}
+
+bool mr_sec_edhoc_is_m1_ready(void) {
+    return sec_vars.state == EDHOC_M1_READY;
+}
+
+void mr_sec_edhoc_event_loop(void) {
+    sec_vars.edhoc_res = 0;
+    switch (sec_vars.state) {
+        case EDHOC_M1_PENDING: {
+            sec_vars.edhoc_res = mr_sec_edhoc_init();
+            if (sec_vars.edhoc_res != 0) {
+                break;
+            }
+            sec_vars.edhoc_res = mr_sec_edhoc_prepare_m1(sec_vars.message_1.content, &sec_vars.message_1_len);
+            if (sec_vars.edhoc_res != 0) {
+                break;
+            }
+            mr_sec_edhoc_set_state(EDHOC_M1_READY);
+            break;
+        }
+        default:
+            break;
+    }
+
+    if (sec_vars.edhoc_res != 0) {
+        sec_vars.state = EDHOC_ERROR;
+        return;
+    }
 }
