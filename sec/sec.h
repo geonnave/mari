@@ -35,6 +35,7 @@ void    mr_sec_edhoc_set_state(mr_edhoc_state_t state);
 int8_t  mr_sec_edhoc_init(void);
 uint8_t mr_sec_edhoc_prepare_m1(uint8_t *msg_1, uint8_t *msg1_len);
 bool    mr_sec_edhoc_is_m1_ready(void);
+size_t  mr_sec_edhoc_set_ready_message(uint8_t *buffer);
 
 void mr_sec_edhoc_event_loop(void);
 

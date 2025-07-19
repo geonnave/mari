@@ -19,8 +19,9 @@
 #include "scheduler.h"
 #include "association.h"
 #include "bloom.h"
-#include "mari.h"
 #include "queue.h"
+#include "sec.h"
+#include "mari.h"
 
 //=========================== defines ==========================================
 
@@ -126,7 +127,7 @@ bool mr_queue_pop(void) {
 }
 
 void mr_queue_set_join_request(uint64_t node_id) {
-    queue_vars.join_packet.length = mr_build_packet_join_request(queue_vars.join_packet.buffer, node_id);
+    queue_vars.join_packet.length = mr_build_packet_join_request_with_m1(queue_vars.join_packet.buffer, node_id);
 }
 
 void mr_queue_set_join_response(uint64_t node_id, uint8_t assigned_cell_id) {

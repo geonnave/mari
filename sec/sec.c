@@ -145,6 +145,15 @@ bool mr_sec_edhoc_is_m1_ready(void) {
     return sec_vars.state == EDHOC_M1_READY;
 }
 
+size_t mr_sec_edhoc_set_ready_message(uint8_t *buffer) {
+    if (sec_vars.state != EDHOC_M1_READY) {
+        return 0;
+    }
+
+    memcpy(buffer, sec_vars.message_1.content, sec_vars.message_1_len);
+    return sec_vars.message_1_len;
+}
+
 void mr_sec_edhoc_event_loop(void) {
     sec_vars.edhoc_res = 0;
     switch (sec_vars.state) {
