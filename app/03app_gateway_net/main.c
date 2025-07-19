@@ -101,7 +101,7 @@ int main(void) {
     mr_timer_hf_init(MARI_APP_TIMER_DEV);
     _init_ipc();
 
-    mari_init(MARI_GATEWAY, MARI_NET_ID_DEFAULT, schedule_app, &_mari_event_callback);
+    mari_init(MARI_GATEWAY, 1707, schedule_app, &_mari_event_callback);
 
     mr_timer_hf_set_periodic_us(MARI_APP_TIMER_DEV, 3, mr_scheduler_get_duration_us() * 10, &_to_uart_gateway_loop);
 

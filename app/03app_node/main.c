@@ -59,7 +59,7 @@ int main(void) {
 
     board_init();
 
-    mari_init(MARI_NODE, MARI_NET_ID_PATTERN_ANY, schedule_app, &mari_event_callback);
+    mari_init(MARI_NODE, 1707, schedule_app, &mari_event_callback);
 
     while (1) {
         __SEV();
