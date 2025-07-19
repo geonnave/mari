@@ -23,7 +23,7 @@ edhoc_vars_t node_vars = { 0 };
 //=========================== main =============================================
 
 int main(void) {
-    printf("Hello Mari Node\n");
+    printf("\nHello Mari Node\n");
     int8_t   res = 0;
     uint32_t ts;
 

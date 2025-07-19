@@ -39,7 +39,7 @@ typedef struct {
 
     // used during execution of authz
     EadAuthzDevice   device;
-    EADItemC         ead_1, ead_2;
+    EadItemsC        ead_1, ead_2;
     BytesP256ElemLen authz_secret;
 } sec_vars_t;
 
@@ -117,14 +117,14 @@ uint8_t mr_sec_edhoc_prepare_m1(uint8_t *msg_1, uint8_t *msg1_len) {
         return res;
     }
 
-    //// FIXME: re-add EAD item preparation
-    // res = authz_device_prepare_ead_1(&sec_vars.device, &sec_vars.authz_secret, SS, &sec_vars.ead_1);
-    // if (res != 0) {
-    //     return res;
-    // }
+    // FIXME: re-add EAD item preparation
+    res = authz_device_prepare_ead_1(&sec_vars.device, &sec_vars.authz_secret, SS, &sec_vars.ead_1);
+    if (res != 0) {
+        return res;
+    };
 
-    // res = initiator_prepare_message_1(&sec_vars.initiator, NULL, &sec_vars.ead_1, &sec_vars.message_1);
-    res = initiator_prepare_message_1(&sec_vars.initiator, NULL, NULL, &sec_vars.message_1);
+    res = initiator_prepare_message_1(&sec_vars.initiator, NULL, &sec_vars.ead_1, &sec_vars.message_1);
+    // res = initiator_prepare_message_1(&sec_vars.initiator, NULL, NULL, &sec_vars.message_1);
     if (res != 0) {
         return res;
     }
