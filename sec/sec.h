@@ -18,9 +18,11 @@
 #include <nrf.h>
 #include <stdbool.h>
 
+#if defined(NRF52840_XXAA)
 #include "lakers.h"
 #include "lakers_shared.h"
 #include "lakers_ead_authz.h"
+#endif
 
 typedef enum {
     EDHOC_NONE = 1,
