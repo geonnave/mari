@@ -133,7 +133,15 @@ void mr_handle_packet(uint8_t *packet, uint8_t length) {
                     mr_queue_set_join_response(header->src, (uint8_t)cell_id);
                     // set the dirty flag that will trigger the event loop to compute the bloom filter
                     mr_bloom_gateway_set_dirty();
-                    _mari_vars.app_event_callback(MARI_NODE_JOINED, (mr_event_data_t){ .data.node_info.node_id = header->src });
+                    mari_packet_t mari_packet = {
+                        .len         = length,
+                        .header      = header,
+                        .payload     = packet + sizeof(mr_packet_header_t),
+                        .payload_len = length - sizeof(mr_packet_header_t)
+                    };
+                    _mari_vars.app_event_callback(MARI_NODE_JOINED, (mr_event_data_t){
+                                                                        .data.node_info.node_id    = header->src,
+                                                                        .data.node_info.new_packet = mari_packet });
                 } else {
                     _mari_vars.app_event_callback(MARI_ERROR, (mr_event_data_t){ .tag = MARI_GATEWAY_FULL });
                 }
