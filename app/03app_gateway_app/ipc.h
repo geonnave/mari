@@ -23,7 +23,7 @@
 #define NRF_MUTEX NRF_APPMUTEX_NS
 #endif
 
-#define IPC_IRQ_PRIORITY (1)
+#define IPC_IRQ_PRIORITY (2)
 
 typedef enum {
     IPC_CHAN_RADIO_TO_UART = 0,  ///< Channel used for radio RX events

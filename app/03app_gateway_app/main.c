@@ -11,12 +11,14 @@
  */
 #include <nrf.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "ipc.h"
 
 #include "mr_device.h"
 #include "hdlc.h"
-#include "uart.h"
+// #include "uart.h"
+#include "happyserial.h"
 
 #include "mr_gpio.h"
 mr_gpio_t pin3         = { .port = 1, .pin = 5 };
@@ -25,9 +27,9 @@ mr_gpio_t pin_dbg_uart = { .port = 1, .pin = 8 };
 
 //=========================== defines ==========================================
 
-#define MR_UART_INDEX (1)  ///< Index of UART peripheral to use
-// #define MR_UART_BAUDRATE (1000000UL)  ///< UART baudrate used by the gateway
-#define MR_UART_BAUDRATE (115200L)  ///< UART baudrate used by the gateway
+// #define MR_UART_INDEX (1)  ///< Index of UART peripheral to use
+// // #define MR_UART_BAUDRATE (1000000UL)  ///< UART baudrate used by the gateway
+// #define MR_UART_BAUDRATE (115200L)  ///< UART baudrate used by the gateway
 
 typedef struct {
     bool    mari_frame_received;
@@ -36,9 +38,9 @@ typedef struct {
     uint8_t hdlc_encode_buffer[1024];  // Should be large enough
 } gateway_app_vars_t;
 
-// UART RX and TX pins
-static const mr_gpio_t _mr_uart_tx_pin = { .port = 1, .pin = 1 };
-static const mr_gpio_t _mr_uart_rx_pin = { .port = 1, .pin = 0 };
+//// UART RX and TX pins
+//static const mr_gpio_t _mr_uart_tx_pin = { .port = 1, .pin = 1 };
+//static const mr_gpio_t _mr_uart_rx_pin = { .port = 1, .pin = 0 };
 
 static gateway_app_vars_t                                           _app_vars = { 0 };
 volatile __attribute__((section(".shared_data"))) ipc_shared_data_t ipc_shared_data;
@@ -99,9 +101,15 @@ static void _release_network_core(void) {
     while (!ipc_shared_data.net_ready) {}
 }
 
-static void _uart_callback(uint8_t byte) {
-    _app_vars.uart_byte          = byte;
-    _app_vars.uart_byte_received = true;
+// static void _uart_callback(uint8_t byte) {
+//     _app_vars.uart_byte          = byte;
+//     _app_vars.uart_byte_received = true;
+// }
+
+void _happyserial_rx_cb(uint8_t *buf, uint8_t bufLen) {
+    memcpy((void *)ipc_shared_data.uart_to_radio, buf, bufLen);
+    ipc_shared_data.uart_to_radio_len = bufLen;
+    NRF_IPC_S->TASKS_SEND[IPC_CHAN_UART_TO_RADIO] = 1;
 }
 
 int main(void) {
@@ -115,7 +123,8 @@ int main(void) {
 
     _configure_ram_non_secure(2, 1);
     _init_ipc();
-    mr_uart_init(MR_UART_INDEX, &_mr_uart_rx_pin, &_mr_uart_tx_pin, MR_UART_BAUDRATE, &_uart_callback);
+    // mr_uart_init(MR_UART_INDEX, &_mr_uart_rx_pin, &_mr_uart_tx_pin, MR_UART_BAUDRATE, &_uart_callback);
+    happyserial_init(_happyserial_rx_cb);
 
     _release_network_core();
     // this is a bit hacky -- sometimes it does not work without this
@@ -126,33 +135,14 @@ int main(void) {
 
         if (_app_vars.uart_byte_received) {
             _app_vars.uart_byte_received = false;
-            mr_hdlc_state_t hdlc_state   = mr_hdlc_rx_byte(_app_vars.uart_byte);
-            switch ((uint8_t)hdlc_state) {
-                case MR_HDLC_STATE_IDLE:
-                case MR_HDLC_STATE_RECEIVING:
-                case MR_HDLC_STATE_ERROR:
-                    break;
-                case MR_HDLC_STATE_READY:
-                {
-                    size_t msg_len                    = mr_hdlc_decode((uint8_t *)ipc_shared_data.uart_to_radio);
-                    ipc_shared_data.uart_to_radio_len = msg_len;
-                    if (msg_len) {
-                        NRF_IPC_S->TASKS_SEND[IPC_CHAN_UART_TO_RADIO] = 1;
-                    }
-                } break;
-                default:
-                    break;
-            }
-            if (hdlc_state == MR_HDLC_STATE_ERROR) {
-                mr_gpio_set(&pin3);
-                mr_gpio_clear(&pin3);
-            }
         }
 
         if (_app_vars.mari_frame_received) {
             _app_vars.mari_frame_received = false;
-            size_t frame_len              = mr_hdlc_encode((uint8_t *)ipc_shared_data.radio_to_uart, ipc_shared_data.radio_to_uart_len, _app_vars.hdlc_encode_buffer);
-            mr_uart_write(MR_UART_INDEX, _app_vars.hdlc_encode_buffer, frame_len);
+            // size_t frame_len              = mr_hdlc_encode((uint8_t *)ipc_shared_data.radio_to_uart, ipc_shared_data.radio_to_uart_len, _app_vars.hdlc_encode_buffer);
+            // mr_uart_write(MR_UART_INDEX, _app_vars.hdlc_encode_buffer, frame_len);
+            memcpy(_app_vars.hdlc_encode_buffer, (const void *)ipc_shared_data.radio_to_uart, ipc_shared_data.radio_to_uart_len);
+            happyserial_tx(_app_vars.hdlc_encode_buffer, ipc_shared_data.radio_to_uart_len);
         }
     }
 }
