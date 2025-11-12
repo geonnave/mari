@@ -58,8 +58,11 @@ typedef struct {
 } gateway_app_vars_t;
 
 // UART RX and TX pins
-static const mr_gpio_t _mr_uart_tx_pin = { .port = 1, .pin = 1 };
-static const mr_gpio_t _mr_uart_rx_pin = { .port = 1, .pin = 0 };
+//static const mr_gpio_t _mr_uart_tx_pin = { .port = 1, .pin = 1 };
+//static const mr_gpio_t _mr_uart_rx_pin = { .port = 1, .pin = 0 };
+
+static const mr_gpio_t _mr_uart_tx_pin = { .port = 0, .pin = 17 };
+static const mr_gpio_t _mr_uart_rx_pin = { .port = 0, .pin = 18 };
 
 static gateway_app_vars_t                                           _app_vars = { 0 };
 volatile __attribute__((section(".shared_data"))) ipc_shared_data_t ipc_shared_data;
