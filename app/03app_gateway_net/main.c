@@ -30,7 +30,7 @@
 
 //=========================== defines ==========================================
 
-#define MARI_APP_NET_ID MARI_NET_ID_DEFAULT
+#define MARI_APP_NET_ID 0xA000
 
 #define MARI_APP_TIMER_DEV 1
 
