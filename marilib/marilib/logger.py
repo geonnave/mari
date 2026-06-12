@@ -114,6 +114,10 @@ class MetricsLogger:
             "success_rate_total",
             "pdr_downlink",
             "pdr_uplink",
+            "radio_pdr_downlink",
+            "radio_pdr_uplink",
+            "uart_pdr_downlink",
+            "uart_pdr_uplink",
             "rssi_node_dbm",
             "rssi_gw_dbm",
             "avg_latency_edge_ms",
@@ -164,6 +168,16 @@ class MetricsLogger:
         ]
         self._gateway_writer.writerow(row)
 
+    def _safe_fraction(self, value: float | None) -> float:
+        """Normalizes invalid PDR values to a stable 0..1 range for CSV export."""
+        if value is None:
+            return 0.0
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        return 0.0 if v < 0 else min(v, 1.0)
+
     def log_all_nodes_metrics(self, nodes: List[MariNode]):
         """Writes metrics for all nodes, handling rotation."""
         if not self._log_common() or self._nodes_writer is None:
@@ -184,6 +198,10 @@ class MetricsLogger:
                 f"{node.stats.success_rate():.2%}",
                 f"{node.pdr_downlink:.2%}",
                 f"{node.pdr_uplink:.2%}",
+                f"{self._safe_fraction(node.stats_pdr_downlink_radio()):.2%}",
+                f"{self._safe_fraction(node.stats_pdr_uplink_radio()):.2%}",
+                f"{self._safe_fraction(node.stats_pdr_downlink_uart()):.2%}",
+                f"{self._safe_fraction(node.stats_pdr_uplink_uart()):.2%}",
                 node.stats_rssi_node_dbm(),
                 node.stats_rssi_gw_dbm(),
                 f"{node.stats_avg_latency_roundtrip_node_edge_ms():.2f}",
