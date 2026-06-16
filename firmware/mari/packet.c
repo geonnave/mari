@@ -55,8 +55,10 @@ size_t mr_build_packet_beacon(uint8_t *buffer, uint16_t net_id, uint64_t asn, ui
         .remaining_capacity = remaining_capacity,
         .active_schedule_id = active_schedule_id,
     };
-    // add bloom filter
-    mr_bloom_gateway_copy(beacon.bloom_filter);
+    // add bloom filter, if available
+    if (mr_bloom_gateway_is_available()) {
+        mr_bloom_gateway_copy(beacon.bloom_filter);
+    }
     memcpy(buffer, &beacon, sizeof(mr_beacon_packet_header_t));
     return sizeof(mr_beacon_packet_header_t);
 }
