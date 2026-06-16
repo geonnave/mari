@@ -57,7 +57,7 @@ class SerialAdapter(CommunicationAdapterBase):
     def close(self):
         print("[yellow]Disconnect from gateway...[/]")
 
-    def send_data(self, data, late_stamp_offset: int | None = None):
+    def send_data(self, data, late_stamp_offset: int | None = None) -> int | None:
         """Write data over the UART.
 
         If `late_stamp_offset` is given, overwrite
@@ -66,7 +66,11 @@ class SerialAdapter(CommunicationAdapterBase):
         serial lock is acquired and just before HDLC encoding. Used by
         metrics probes to capture their TX timestamp as close to
         wire-departure as possible.
+
+        Returns the stamped microsecond value when `late_stamp_offset`
+        is set, otherwise None.
         """
+        stamp_us = None
         with self.serial.lock:  # Use the existing lock for thread safety
             if late_stamp_offset is not None:
                 data = bytearray(data)
@@ -75,6 +79,7 @@ class SerialAdapter(CommunicationAdapterBase):
             self.serial.serial.flush()
             encoded = hdlc_encode(data)
             self.serial.write(encoded)
+        return stamp_us
 
 
 def parse_mqtt_url(url: str):

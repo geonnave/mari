@@ -7,6 +7,7 @@ from enum import IntEnum
 import rich
 
 from marilib.mari_protocol import Frame, MetricsProbePayload
+from marilib.probe_tracker import ProbeTracker
 from marilib.protocol import Packet, PacketFieldMetadata
 
 # schedules taken from: https://github.com/DotBots/mari-evaluation/blob/main/simulations/radio-schedule.ipynb
@@ -249,6 +250,24 @@ class MariNode:
     pdr_uplink: float = 0.0
     probe_tx_count: int = 0
     probe_rx_count: int = 0
+    probe_tracker: ProbeTracker = field(default_factory=ProbeTracker)
+
+    @property
+    def sent_probe_packets(self):
+        return self.probe_tracker.sent_probe_packets
+
+    @property
+    def effective_latency_samples(self):
+        return self.probe_tracker.effective_latency_samples
+
+    def stats_avg_effective_latency_ms(self) -> float:
+        return self.probe_tracker.stats_avg_effective_latency_ms()
+
+    def stats_pending_probe_count(self) -> int:
+        return self.probe_tracker.stats_pending_probe_count()
+
+    def has_pending_probe(self) -> bool:
+        return self.probe_tracker.has_pending
 
     @property
     def is_alive(self) -> bool:
@@ -543,6 +562,15 @@ class MariGateway:
             self.nodes
         )
         return res if res >= 0 else 0.0
+
+    def stats_avg_effective_latency_ms(self) -> float:
+        if not self.nodes:
+            return 0.0
+        res = sum(n.stats_avg_effective_latency_ms() for n in self.nodes) / len(self.nodes)
+        return res if res >= 0 else 0.0
+
+    def stats_pending_probe_count(self) -> int:
+        return sum(n.stats_pending_probe_count() for n in self.nodes)
 
     # Network-level averages of the ASN-decomposed latency, skipping
     # nodes that haven't produced a usable sample yet.

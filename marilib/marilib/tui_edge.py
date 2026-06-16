@@ -112,8 +112,10 @@ class MarilibTUIEdge(MarilibTUI):
         status.append(mari.gateway.info.repr_schedule_cells_with_colors())
 
         # --- Latency and PDR Display ---
-        avg_latency_edge = mari.gateway.stats_avg_latency_roundtrip_node_edge_ms()
-        has_latency_info = avg_latency_edge > 0
+        avg_rtt_latency = mari.gateway.stats_avg_latency_roundtrip_node_edge_ms()
+        avg_effective_latency = mari.gateway.stats_avg_effective_latency_ms()
+        pending_probes = mari.gateway.stats_pending_probe_count()
+        has_latency_info = avg_rtt_latency > 0 or avg_effective_latency > 0
 
         # Check if we have PDR info by looking at the gateway averages
         avg_uart_pdr_up = mari.gateway.stats_avg_pdr_uplink_uart()
@@ -139,7 +141,10 @@ class MarilibTUIEdge(MarilibTUI):
         # Display Latency
         if has_latency_info:
             status.append("Latency:  ", style="bold yellow")
-            status.append(f"Avg: {avg_latency_edge:.1f} ms")
+            status.append(f"RTT Avg: {avg_rtt_latency:.1f} ms")
+            status.append(f"  |  Effective Avg: {avg_effective_latency:.1f} ms")
+            if pending_probes:
+                status.append(f"  |  Pending: {pending_probes}")
             # Network-wide latency breakdown. Four legs sum ≈ host RTT;
             # see MetricsProbePayload and MariNode docstrings for what
             # each term covers. Red on the largest term so the eye
@@ -238,6 +243,7 @@ class MarilibTUIEdge(MarilibTUI):
         # Latency breakdown and Q (sf) are explained in the
         # "Reading the TUI" section of README.md.
         table.add_column("Latency | host/dl/app/ul (ms)", justify="center")
+        table.add_column("Effective (ms)", justify="right")
         table.add_column("Q (sf)", justify="right")
 
         for node in nodes:
@@ -271,6 +277,14 @@ class MarilibTUIEdge(MarilibTUI):
                 lat_str = f"{host_rtt:.0f} | ? / ? / ? / ?"
             else:
                 lat_str = "..."
+
+            effective_ms = node.stats_avg_effective_latency_ms()
+            if effective_ms > 0:
+                effective_str = f"{effective_ms:.0f}"
+                if node.stats_pending_probe_count():
+                    effective_str += "*"
+            else:
+                effective_str = "..."
 
             # Node TX-queue depth in slotframes (1 U slot per node per
             # slotframe → ul_ms / sf_duration_ms ≈ packets queued ahead
@@ -350,6 +364,7 @@ class MarilibTUIEdge(MarilibTUI):
                 f"{pdr_up_str} | {rssi_gw_str} dBm",
                 f"{pdr_down_gw_edge_str} | {pdr_up_gw_edge_str}",
                 lat_str,
+                effective_str,
                 q_str,
             )
         return table

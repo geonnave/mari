@@ -10,7 +10,8 @@ from marilib.mari_protocol import (
     Header,
     MetricsProbePayload,
 )
-from marilib.model import MARI_PROBE_STATS_MAX_LEN, MariGateway, MariNode
+from marilib.model import MARI_PROBE_STATS_MAX_LEN, MariGateway, MariNode, SCHEDULES
+from marilib.probe_tracker import MAX_PROBE_RETRIES, PendingProbe
 
 if TYPE_CHECKING:
     from marilib.marilib_edge import MarilibEdge
@@ -51,6 +52,8 @@ EDGE_TX_TS_WIRE_OFFSET = (
     )
 )
 
+_TIMEOUT_TICK_S = 0.02
+
 
 class MetricsTester:
     """A thread-based class to periodically test metrics to all nodes."""
@@ -83,24 +86,39 @@ class MetricsTester:
             self._thread.join()
         print("[yellow]Metrics tester stopped.[/]")
 
+    def _probe_timeout_ms(self) -> float | None:
+        schedule = SCHEDULES.get(self.marilib.gateway.info.schedule_id)
+        if schedule is None:
+            return None
+        sf_duration = float(schedule["sf_duration"])
+        return 2.0 * sf_duration  # tune other value if needed
+
+    def _wait_with_timeout_checks(self, duration_s: float) -> None:
+        """Sleep in small chunks so probe timeouts are checked promptly."""
+        deadline = time.monotonic() + duration_s
+        while not self._stop_event.is_set():
+            self.check_timeouts()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            self._stop_event.wait(min(_TIMEOUT_TICK_S, remaining))
+
     def _run(self):
         """The main loop for the testing thread."""
-        # Initial delay to allow nodes to join
-        self._stop_event.wait(self.interval)
+        self._wait_with_timeout_checks(self.interval)
 
         while not self._stop_event.is_set():
-            nodes = list(self.marilib.nodes)
+            nodes = list(self.marilib.gateway.nodes)
             if not nodes:
-                self._stop_event.wait(self.interval)
+                self._wait_with_timeout_checks(self.interval)
                 continue
 
             for node in nodes:
                 if self._stop_event.is_set():
                     break
-                self.send_metrics_request(node, "edge")
-                # Spread the requests evenly over the interval
+                self._send_edge_probe(node)
                 sleep_duration = self.interval / len(nodes)
-                self._stop_event.wait(sleep_duration)
+                self._wait_with_timeout_checks(sleep_duration)
 
     def timestamp_us(self) -> int:
         """Returns a monotonic timestamp in microseconds.
@@ -113,26 +131,89 @@ class MetricsTester:
         """
         return time.monotonic_ns() // 1000
 
+    def _register_pending_probe(
+        self, node: MariNode, edge_tx_ts_us: int, sent_at_us: int, retry_count: int = 0
+    ) -> None:
+        node.probe_tracker.register_pending(
+            PendingProbe(
+                edge_tx_ts_us=edge_tx_ts_us,
+                node_address=node.address,
+                sent_at_us=sent_at_us,
+                retry_count=retry_count,
+            )
+        )
+
+    def _transmit_probe(self, node: MariNode, retry_count: int = 0) -> int | None:
+        """Send a probe and register it as pending. Returns edge_tx_ts_us."""
+        payload = MetricsProbePayload()
+        with self.marilib.lock:
+            payload.edge_tx_count = node.probe_increment_tx_count()
+        payload_bytes = payload.to_bytes()
+        # send_probe takes mari.lock too — don't call it under that lock.
+        edge_tx_ts_us = self.marilib.send_probe(node.address, payload_bytes)
+        if edge_tx_ts_us is None:
+            return None
+        with self.marilib.lock:
+            self._register_pending_probe(node, edge_tx_ts_us, edge_tx_ts_us, retry_count)
+        return edge_tx_ts_us
+
+    def _send_edge_probe(self, node: MariNode) -> None:
+        """Send a probe if the node has no pending one."""
+        with self.marilib.lock:
+            if node.has_pending_probe():
+                return
+        self._transmit_probe(node)
+
     def send_metrics_request(self, node: MariNode, marilib_type: str):
         """Sends a metrics request packet to a specific address."""
-        payload = MetricsProbePayload()
         if marilib_type == "edge":
-            # Leave edge_tx_ts_us as 0; MarilibEdge.send_probe overwrites
-            # it with a monotonic timestamp inside the serial lock, right
-            # before the bytes leave the UART — avoids inflating the
-            # measured RTT with mari.lock contention from render_tui /
-            # update / other send_frame calls.
-            payload.edge_tx_count = node.probe_increment_tx_count()
-            payload_bytes = payload.to_bytes()
-            self.marilib.send_probe(node.address, payload_bytes)
+            self._send_edge_probe(node)
         elif marilib_type == "cloud":
             # Cloud probes are still stamped on call (MQTT publish is
             # async and the cloud's MetricsTester is currently never
             # started — marilib_cloud.py:55-57 — so this path is unused).
+            payload = MetricsProbePayload()
             payload.cloud_tx_ts_us = self.timestamp_us()
             payload.cloud_tx_count = node.probe_increment_tx_count()
             payload_bytes = payload.to_bytes()
             self.marilib.send_frame(node.address, payload_bytes)
+
+    def check_timeouts(self) -> None:
+        """Expire pending probes, record effective latency, and retry."""
+        timeout_ms = self._probe_timeout_ms()
+        if timeout_ms is None:
+            return
+
+        timeout_us = int(timeout_ms * 1000)
+        now_us = self.timestamp_us()
+        expired: list[tuple[MariNode, PendingProbe]] = []
+        retries: list[tuple[MariNode, int]] = []
+
+        with self.marilib.lock:
+            for node in self.marilib.gateway.nodes:
+                for pending in list(node.sent_probe_packets.values()):
+                    if now_us - pending.sent_at_us > timeout_us:
+                        expired.append((node, pending))
+
+            for node, pending in expired:
+                node.probe_tracker.pop_pending(pending.edge_tx_ts_us)
+                node.probe_tracker.record_effective_sample(timeout_ms)
+
+                if pending.retry_count < MAX_PROBE_RETRIES:
+                    retries.append((node, pending.retry_count + 1))
+
+        for node, retry_count in retries:
+            self._transmit_probe(node, retry_count=retry_count)
+
+    def _complete_pending_probe(
+        self, node: MariNode, edge_tx_ts_us: int, rx_ts_us: int
+    ) -> PendingProbe | None:
+        pending = node.probe_tracker.pop_pending(edge_tx_ts_us)
+        if pending is None:
+            return None
+        effective_ms = (rx_ts_us - pending.sent_at_us) / 1000.0
+        node.probe_tracker.record_effective_sample(effective_ms)
+        return pending
 
     def handle_response_edge(self, frame: Frame, rx_ts_us: int | None = None):
         """
@@ -162,7 +243,13 @@ class MetricsTester:
             print(f"[red]Error parsing metrics response: {e}[/]")
             return
 
-        payload.edge_rx_ts_us = rx_ts_us if rx_ts_us is not None else self.timestamp_us()
+        rx_ts = rx_ts_us if rx_ts_us is not None else self.timestamp_us()
+        pending = self._complete_pending_probe(node, payload.edge_tx_ts_us, rx_ts)
+        if pending is None:
+            # Stale reply (e.g. after timeout/retry): skip probe_stats — RTT would be bogus.
+            return None
+
+        payload.edge_rx_ts_us = rx_ts
         payload.edge_rx_count = node.probe_increment_rx_count()
 
         node.save_probe_stats(payload)

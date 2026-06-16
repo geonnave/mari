@@ -114,7 +114,7 @@ class MarilibEdge(MarilibBase):
             EdgeEvent.to_bytes(EdgeEvent.NODE_DATA) + mari_frame.to_bytes()
         )
 
-    def send_probe(self, dst: int, payload: bytes):
+    def send_probe(self, dst: int, payload: bytes) -> int | None:
         """Send a metrics probe with edge_tx_ts_us stamped at wire-departure.
 
         Identical wire format to send_frame, but edge_tx_ts_us is
@@ -124,6 +124,9 @@ class MarilibEdge(MarilibBase):
         (mari.lock during render_tui, update, etc.). The caller MUST
         place edge_tx_ts_us within `payload` at the offset assumed by
         EDGE_TX_TS_WIRE_OFFSET — currently only MetricsTester does.
+
+        Returns the stamped edge_tx_ts_us value, or None if stamping
+        did not occur.
         """
         assert self.serial_interface is not None
 
@@ -134,7 +137,7 @@ class MarilibEdge(MarilibBase):
             if n := self.gateway.get_node(dst):
                 n.register_sent_frame(mari_frame)
 
-        self.serial_interface.send_data(
+        return self.serial_interface.send_data(
             EdgeEvent.to_bytes(EdgeEvent.NODE_DATA) + mari_frame.to_bytes(),
             late_stamp_offset=EDGE_TX_TS_WIRE_OFFSET,
         )
