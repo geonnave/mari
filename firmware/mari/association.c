@@ -69,6 +69,13 @@ mr_gpio_t led3 = { .port = 0, .pin = 31 };
 // and the gateway prioritizes join responses over all other downstream packets
 #define MARI_JOINING_STATE_TIMEOUT ((MARI_WHOLE_SLOT_DURATION * (2 - 1)) + (MARI_WHOLE_SLOT_DURATION / 2))  // apply a half-slot duration just so that the timeout happens before the slot boundary
 
+// Number of consecutive beacons that must omit this node from a non-empty bloom
+// filter before it leaves. A single omitting beacon can be stale (the gateway
+// has not recomputed its filter yet after a recent join), so leaving on one
+// would bounce freshly-joined nodes. The 3 beacon slots sit at the start of the
+// slotframe, so 3 misses span roughly one slotframe of consistent omission.
+#define MARI_BLOOM_MISS_THRESHOLD 3
+
 typedef struct {
     mr_assoc_state_t state;
     mr_event_cb_t    mari_event_callback;
@@ -82,6 +89,7 @@ typedef struct {
     uint32_t       join_response_timeout_ts;           ///< Time when the node will give up joining
     uint16_t       synced_gateway_remaining_capacity;  ///< Number of nodes that my gateway can still accept
     mr_event_tag_t is_pending_disconnect;              ///< Whether the node is pending a disconnect
+    uint8_t        bloom_miss_count;                   ///< Consecutive beacons whose non-empty bloom omitted this node
 } assoc_vars_t;
 
 //=========================== variables =======================================
@@ -186,6 +194,7 @@ void mr_assoc_node_handle_joined(uint64_t gateway_id) {
     mr_event_data_t event_data = { .data.gateway_info.gateway_id = gateway_id };
     assoc_vars.mari_event_callback(MARI_CONNECTED, event_data);
     assoc_vars.is_pending_disconnect = MARI_NONE;        // reset the pending disconnect flag
+    assoc_vars.bloom_miss_count      = 0;                // fresh join: do not carry over stale bloom misses
     mr_assoc_node_keep_gateway_alive(mr_mac_get_asn());  // initialize the gateway's keep-alive
     mr_assoc_node_reset_backoff();
 }
@@ -418,11 +427,18 @@ void mr_assoc_handle_beacon(uint8_t *packet, uint8_t length, uint8_t channel, ui
 
     bool from_my_gateway = beacon->src == mr_mac_get_synced_gateway();
     if (from_my_gateway && mr_assoc_is_joined()) {
-        bool still_joined = mr_bloom_node_contains(mr_device_id(), beacon->bloom_filter);
-        if (!still_joined) {
-            // node no longer joined to this gateway, so need to leave
-            assoc_vars.is_pending_disconnect = MARI_PEER_LOST_BLOOM;
-            return;
+        // An empty filter carries no membership info (gateway mid-recompute), so
+        // ignore it. A non-empty filter that omits us may be stale (gateway has
+        // not yet recomputed after a recent join) or a real eviction; only leave
+        // after MARI_BLOOM_MISS_THRESHOLD consecutive omitting beacons so a
+        // transient stale/empty beacon does not drop us.
+        if (!mr_bloom_is_empty(beacon->bloom_filter) && !mr_bloom_node_contains(mr_device_id(), beacon->bloom_filter)) {
+            if (++assoc_vars.bloom_miss_count >= MARI_BLOOM_MISS_THRESHOLD) {
+                assoc_vars.is_pending_disconnect = MARI_PEER_LOST_BLOOM;
+                return;
+            }
+        } else {
+            assoc_vars.bloom_miss_count = 0;
         }
 
         mr_assoc_node_keep_gateway_alive(mr_mac_get_asn());
