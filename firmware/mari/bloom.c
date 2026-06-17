@@ -69,6 +69,13 @@ bool mr_bloom_gateway_is_available(void) {
 }
 
 uint8_t mr_bloom_gateway_copy(uint8_t *output) {
+    if (!bloom_vars.is_available) {
+        // The filter is being (re)computed, so it is not safe to read. Emit a
+        // pass-all filter (all ones) instead: membership succeeds for every
+        // node, so a beacon sent mid-recompute never falsely evicts anyone.
+        memset(output, 0xFF, MARI_BLOOM_M_BYTES);
+        return MARI_BLOOM_M_BYTES;
+    }
     memcpy(output, bloom_vars.bloom, MARI_BLOOM_M_BYTES);
     return MARI_BLOOM_M_BYTES;
 }
