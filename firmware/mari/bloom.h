@@ -40,5 +40,6 @@ void    mr_bloom_gateway_compute(void);
 void    mr_bloom_gateway_event_loop(void);
 
 bool mr_bloom_node_contains(uint64_t node_id, const uint8_t *bloom);
+bool mr_bloom_is_empty(const uint8_t *bloom);
 
 #endif  // __BLOOM_H

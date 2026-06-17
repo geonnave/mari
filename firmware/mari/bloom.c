@@ -122,4 +122,16 @@ bool mr_bloom_node_contains(uint64_t node_id, const uint8_t *bloom) {
     return true;
 }
 
+// An all-zero filter carries no membership information: the gateway either has
+// not computed a filter yet or is shipping a placeholder while it recomputes.
+// Callers must not treat membership failure against such a filter as eviction.
+bool mr_bloom_is_empty(const uint8_t *bloom) {
+    for (size_t i = 0; i < MARI_BLOOM_M_BYTES; i++) {
+        if (bloom[i] != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 //=========================== private ==========================================
