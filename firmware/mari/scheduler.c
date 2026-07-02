@@ -24,6 +24,14 @@
 
 //=========================== defines ==========================================
 
+// Beacon channel hopping. When defined, the gateway transmits each beacon cell
+// on its own BLE advertising channel and synced nodes listen on the matching
+// channel, so the beacon path gets the frequency diversity the data slots
+// already have. Beacon cell channel_offset maps 0 -> 37, 1 -> 38, 2 -> 39.
+// Comment out to keep all beacons on MARI_FIXED_SCAN_CHANNEL (A/B comparison).
+// Unsynced scanning still uses MARI_FIXED_SCAN_CHANNEL.
+#define MARI_ENABLE_BEACON_HOPPING
+
 //=========================== variables ========================================
 
 typedef struct {
@@ -207,11 +215,11 @@ uint8_t mr_scheduler_get_channel(slot_type_t slot_type, uint64_t asn, uint8_t ch
     return MARI_FIXED_CHANNEL;
 #endif
     if (slot_type == SLOT_TYPE_BEACON) {
-#ifdef MARI_FIXED_SCAN_CHANNEL
-        return MARI_FIXED_SCAN_CHANNEL;
+#ifdef MARI_ENABLE_BEACON_HOPPING
+        // one advertising channel per beacon cell: offset 0 -> 37, 1 -> 38, 2 -> 39
+        return MARI_N_BLE_REGULAR_CHANNELS + (channel_offset % MARI_N_BLE_ADVERTISING_CHANNELS);
 #else
-        // special handling in case the cell is a beacon
-        return MARI_N_BLE_REGULAR_CHANNELS + (asn % MARI_N_BLE_ADVERTISING_CHANNELS);
+        return MARI_FIXED_SCAN_CHANNEL;
 #endif
     } else {
         // As per RFC 7554:
