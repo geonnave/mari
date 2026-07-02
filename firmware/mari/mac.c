@@ -402,9 +402,14 @@ static void start_or_continue_background_scan(void) {
     if (!mac_vars.is_bg_scanning) {
         set_slot_state(STATE_RX_DATA_LISTEN);
         mr_radio_disable();
-        // bg/handover scan listens on the fixed channel (not yet rotated across
-        // the advertising channels, unlike the cold scan above)
+#ifdef MARI_ENABLE_BEACON_HOPPING
+        // rotate the listen channel once per slotframe, so a full handover scan
+        // (which spans one slotframe) sweeps all advertising channels over
+        // successive slotframes and finds neighbours on any non-faded channel
+        mac_vars.current_scan_channel = MARI_N_BLE_REGULAR_CHANNELS + (mr_scheduler_get_slotframe_counter() % MARI_N_BLE_ADVERTISING_CHANNELS);
+#else
         mac_vars.current_scan_channel = MARI_FIXED_SCAN_CHANNEL;
+#endif
         mr_radio_set_channel(mac_vars.current_scan_channel);
         mr_radio_rx();
     }

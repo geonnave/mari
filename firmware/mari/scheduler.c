@@ -94,6 +94,10 @@ uint32_t mr_scheduler_get_duration_us(void) {
     return MARI_WHOLE_SLOT_DURATION * _schedule_vars.active_schedule_ptr->n_cells;
 }
 
+uint32_t mr_scheduler_get_slotframe_counter(void) {
+    return _schedule_vars.slotframe_counter;
+}
+
 // ------------ node functions ------------
 
 // to be called at the NODE when processing a JOIN_RESPONSE
