@@ -57,7 +57,7 @@ void board_init(void) {
 
 static led_color_t _get_color_for_gateway(uint64_t gateway_id) {
     switch (gateway_id) {
-        case 0x1B5B306C3D7542D0:  // 2024, Yinghao
+        case 0x6448E0748F2391CC:  // nRF5340-DK 1050039669
             return GREEN;
         case 0xD5A813E7177DD598:  // 2025, TBD
             return PINK;

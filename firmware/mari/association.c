@@ -62,7 +62,15 @@ mr_gpio_t led3 = { .port = 0, .pin = 31 };
 #define MARI_BACKOFF_N_MIN 4
 #define MARI_BACKOFF_N_MAX 6
 
-#define MARI_JOIN_TIMEOUT_SINCE_SYNCED (1000 * 1000 * 5)  // 5 seconds. after this time, go back to scanning. NOTE: have it be based on slotframe size?
+// Give up joining and rescan after this many consecutive join failures while
+// already pinned at the max backoff window - the "stuck" signal. Fires faster
+// than the wall-clock guard below (~2 s worst case with the huge schedule) and,
+// unlike it, is measured in attempts so it adapts to the slotframe size. Tune
+// against join-storm runs: too low risks premature rescans under normal
+// congestion.
+#define MARI_BACKOFF_MAX_STREAK 3
+
+#define MARI_JOIN_TIMEOUT_SINCE_SYNCED (1000 * 1000 * 5)  // 5 seconds. wall-clock guard: after this, go back to scanning. NOTE: have it be based on slotframe size?
 
 // after this amount of time, consider that a join request failed (very likely due to a collision during the shared uplink slot)
 // currently set to 2 slot durations -- enough when the schedule always have a shared-uplink followed by a downlink,
@@ -79,6 +87,7 @@ typedef struct {
     uint32_t       last_received_from_gateway_asn;  ///< Last received packet when in joined state
     int16_t        backoff_n;
     uint8_t        backoff_random_time;                ///< Number of slots to wait before re-trying to join
+    uint8_t        consecutive_max_backoff;            ///< Consecutive join failures while pinned at the max backoff window
     uint32_t       join_response_timeout_ts;           ///< Time when the node will give up joining
     uint16_t       synced_gateway_remaining_capacity;  ///< Number of nodes that my gateway can still accept
     mr_event_tag_t is_pending_disconnect;              ///< Whether the node is pending a disconnect
@@ -194,6 +203,13 @@ bool mr_assoc_node_handle_failed_join(void) {
     if (assoc_vars.synced_gateway_remaining_capacity > 0) {
         mr_assoc_set_state(JOIN_STATE_SYNCED);
         mr_assoc_node_register_collision_backoff();
+        if (assoc_vars.consecutive_max_backoff >= MARI_BACKOFF_MAX_STREAK) {
+            // stuck: too many failures at the max backoff window; give up and
+            // rescan now rather than wait out the 5 s guard (a rescan can also
+            // move to a different channel/gateway).
+            mr_assoc_node_handle_give_up_joining();
+            return false;
+        }
         mr_queue_set_join_request(mr_mac_get_synced_gateway());  // put a join request packet back on queue
         return true;
     } else {
@@ -234,14 +250,16 @@ bool mr_assoc_node_too_long_synced_without_joining(void) {
 
 // to be called when the node is ready to join, i.e., when it gets synced with the gateway
 void mr_assoc_node_init_backoff(void) {
-    assoc_vars.backoff_n           = MARI_BACKOFF_N_MIN;
-    assoc_vars.backoff_random_time = mr_assoc_node_compute_backoff_random_time(assoc_vars.backoff_n);
+    assoc_vars.backoff_n               = MARI_BACKOFF_N_MIN;
+    assoc_vars.consecutive_max_backoff = 0;
+    assoc_vars.backoff_random_time     = mr_assoc_node_compute_backoff_random_time(assoc_vars.backoff_n);
 }
 
 // to be called when the backoff is no longer needed, or when joining fails
 void mr_assoc_node_reset_backoff(void) {
-    assoc_vars.backoff_n           = -1;
-    assoc_vars.backoff_random_time = 0;
+    assoc_vars.backoff_n               = -1;
+    assoc_vars.consecutive_max_backoff = 0;
+    assoc_vars.backoff_random_time     = 0;
 }
 
 // to be called every time the node checks if it should join
@@ -261,6 +279,13 @@ void mr_assoc_node_register_collision_backoff(void) {
         // increment the n in [0, 2^n - 1], but only if n is less than the max
         uint8_t new_n        = assoc_vars.backoff_n + 1;
         assoc_vars.backoff_n = new_n < MARI_BACKOFF_N_MAX ? new_n : MARI_BACKOFF_N_MAX;
+    }
+
+    // count consecutive failures while pinned at the max window (reset otherwise)
+    if (assoc_vars.backoff_n >= MARI_BACKOFF_N_MAX) {
+        assoc_vars.consecutive_max_backoff++;
+    } else {
+        assoc_vars.consecutive_max_backoff = 0;
     }
 
     assoc_vars.backoff_random_time = mr_assoc_node_compute_backoff_random_time(assoc_vars.backoff_n);
