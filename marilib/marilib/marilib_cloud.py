@@ -41,6 +41,9 @@ class MarilibCloud(MarilibBase):
     main_file: str | None = None
 
     _proto_handlers: dict[int, Callable[[Frame], None]] = field(default_factory=dict, repr=False)
+    # node_address -> (gateway_address, cloud_ts of last uplink seen); used to
+    # detect cross-gateway handovers from the uplink stream (see _track_uplink)
+    _last_uplink: dict[int, tuple[int, datetime]] = field(default_factory=dict, repr=False)
 
     def __post_init__(self):
         self.setup_params = {
@@ -228,6 +231,24 @@ class MarilibCloud(MarilibBase):
         # fallback result in case of error
         return False, EdgeEvent.UNKNOWN, None
 
+    def _track_uplink(self, node_address: int, gateway_address: int) -> None:
+        """Follow each node's serving gateway from its uplink stream and log a
+        HANDOVER when it changes gateways. Downtime is the gap between the node's
+        last uplink via the old gateway and its first via the new one - measured
+        entirely on the cloud clock, so it needs no cross-machine sync and does
+        not depend on the gateway's leave-timeout (unlike NODE_LEFT)."""
+        now = datetime.now()
+        prev = self._last_uplink.get(node_address)
+        self._last_uplink[node_address] = (gateway_address, now)
+        if prev is not None and prev[0] != gateway_address and self.logger:
+            downtime_s = (now - prev[1]).total_seconds()
+            self.logger.log_event(
+                gateway_address,
+                node_address,
+                "HANDOVER",
+                event_tag=f"from=0x{prev[0]:016X};downtime_s={downtime_s:.3f}",
+            )
+
     def on_mqtt_data_received(self, data: bytes):
         res, event_type, event_data = self.handle_mqtt_data(data)
         if res:
@@ -236,4 +257,9 @@ class MarilibCloud(MarilibBase):
                 self.logger.log_event(
                     event_data.gateway_address, event_data.address, event_type.name
                 )
+            # follow the uplink stream to catch cross-gateway handovers on one clock
+            if event_type == EdgeEvent.NODE_DATA:
+                self._track_uplink(event_data.header.source, event_data.header.destination)
+            elif event_type == EdgeEvent.NODE_KEEP_ALIVE:
+                self._track_uplink(event_data.address, event_data.gateway_address)
             self.cb_application(event_type, event_data)
