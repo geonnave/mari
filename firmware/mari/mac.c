@@ -86,6 +86,8 @@ typedef struct {
     uint32_t scan_started_ts;       ///< Timestamp of the start of the scan
     uint32_t scan_expected_end_ts;  ///< Timestamp of the expected end of the scan
     uint32_t current_scan_item_ts;  ///< Timestamp of the current scan item
+    uint8_t  scan_channel_idx;      ///< Rotating index into the advertising channels for cold scan
+    uint8_t  current_scan_channel;  ///< Advertising channel currently being listened on (for beacon bookkeeping)
 
     bool is_bg_scanning;           ///< Whether the node is scanning for gateways in the background
     bool bg_scan_sleep_next_slot;  ///< Whether the next slot is a sleep slot
@@ -344,11 +346,15 @@ static void start_scan(void) {
 
     set_slot_state(STATE_RX_DATA_LISTEN);
     mr_radio_disable();
-#ifdef MARI_FIXED_SCAN_CHANNEL
-    mr_radio_set_channel(MARI_FIXED_SCAN_CHANNEL);  // not doing channel hopping for now
+#ifdef MARI_ENABLE_BEACON_HOPPING
+    // one advertising channel per scan round; a round that finds nothing retries
+    // on the next channel, so a faded channel is escaped within a round or two
+    mac_vars.current_scan_channel = MARI_N_BLE_REGULAR_CHANNELS + (mac_vars.scan_channel_idx % MARI_N_BLE_ADVERTISING_CHANNELS);
+    mac_vars.scan_channel_idx++;
 #else
-    puts("Channel hopping not implemented yet for scanning");
+    mac_vars.current_scan_channel = MARI_FIXED_SCAN_CHANNEL;
 #endif
+    mr_radio_set_channel(mac_vars.current_scan_channel);
     mr_radio_rx();
 }
 
@@ -396,11 +402,15 @@ static void start_or_continue_background_scan(void) {
     if (!mac_vars.is_bg_scanning) {
         set_slot_state(STATE_RX_DATA_LISTEN);
         mr_radio_disable();
-#ifdef MARI_FIXED_SCAN_CHANNEL
-        mr_radio_set_channel(MARI_FIXED_SCAN_CHANNEL);  // not doing channel hopping for now
+#ifdef MARI_ENABLE_BEACON_HOPPING
+        // rotate the listen channel once per slotframe, so a full handover scan
+        // (which spans one slotframe) sweeps all advertising channels over
+        // successive slotframes and finds neighbours on any non-faded channel
+        mac_vars.current_scan_channel = MARI_N_BLE_REGULAR_CHANNELS + (mr_scheduler_get_slotframe_counter() % MARI_N_BLE_ADVERTISING_CHANNELS);
 #else
-        puts("Channel hopping not implemented yet for scanning");
+        mac_vars.current_scan_channel = MARI_FIXED_SCAN_CHANNEL;
 #endif
+        mr_radio_set_channel(mac_vars.current_scan_channel);
         mr_radio_rx();
     }
     mac_vars.is_bg_scanning = true;
@@ -784,7 +794,7 @@ static void activity_scan_end_frame(uint32_t end_frame_ts) {
     uint8_t packet_len;
     mr_radio_get_rx_packet(packet, &packet_len);
 
-    mr_assoc_handle_beacon(packet, packet_len, MARI_FIXED_SCAN_CHANNEL, mac_vars.current_scan_item_ts);
+    mr_assoc_handle_beacon(packet, packet_len, mac_vars.current_scan_channel, mac_vars.current_scan_item_ts);
 
     // if there is still enough time before end of scan, re-enable the radio
     bool still_time_for_rx_scan    = mac_vars.is_scanning && (end_frame_ts + MARI_BEACON_TOA_WITH_PADDING < mac_vars.scan_expected_end_ts);

@@ -94,6 +94,10 @@ uint32_t mr_scheduler_get_duration_us(void) {
     return MARI_WHOLE_SLOT_DURATION * _schedule_vars.active_schedule_ptr->n_cells;
 }
 
+uint32_t mr_scheduler_get_slotframe_counter(void) {
+    return _schedule_vars.slotframe_counter;
+}
+
 // ------------ node functions ------------
 
 // to be called at the NODE when processing a JOIN_RESPONSE
@@ -207,11 +211,11 @@ uint8_t mr_scheduler_get_channel(slot_type_t slot_type, uint64_t asn, uint8_t ch
     return MARI_FIXED_CHANNEL;
 #endif
     if (slot_type == SLOT_TYPE_BEACON) {
-#ifdef MARI_FIXED_SCAN_CHANNEL
-        return MARI_FIXED_SCAN_CHANNEL;
+#ifdef MARI_ENABLE_BEACON_HOPPING
+        // one advertising channel per beacon cell: offset 0 -> 37, 1 -> 38, 2 -> 39
+        return MARI_N_BLE_REGULAR_CHANNELS + (channel_offset % MARI_N_BLE_ADVERTISING_CHANNELS);
 #else
-        // special handling in case the cell is a beacon
-        return MARI_N_BLE_REGULAR_CHANNELS + (asn % MARI_N_BLE_ADVERTISING_CHANNELS);
+        return MARI_FIXED_SCAN_CHANNEL;
 #endif
     } else {
         // As per RFC 7554:

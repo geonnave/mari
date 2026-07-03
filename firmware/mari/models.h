@@ -30,6 +30,14 @@
 #define MARI_FIXED_SCAN_CHANNEL 37  // to hardcode the channel, use a valid value other than 0
 // #endif
 
+// Beacon/scan channel hopping. When defined, the gateway transmits each beacon
+// cell on its own BLE advertising channel (cell offset 0 -> 37, 1 -> 38,
+// 2 -> 39), synced nodes listen on the matching channel, and a scanning node
+// rotates its listen channel one per scan round - giving the beacon/join path
+// the frequency diversity the data slots already have. Comment out to keep all
+// beacons and scanning on MARI_FIXED_SCAN_CHANNEL (A/B comparison).
+#define MARI_ENABLE_BEACON_HOPPING
+
 #define MARI_N_CELLS_MAX 149
 
 #define MARI_ENABLE_BACKGROUND_SCAN 1
