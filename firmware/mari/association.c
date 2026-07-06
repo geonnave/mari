@@ -93,9 +93,22 @@ typedef struct {
     mr_event_tag_t is_pending_disconnect;              ///< Whether the node is pending a disconnect
 } assoc_vars_t;
 
+// Metrics/instrumentation state, kept out of the core association vars: the
+// node-side handover stopwatch, reported in the metrics probe. Timed on the
+// free-running timer (survives re-sync, unlike the ASN) from the first
+// disconnect of an outage to the next join.
+typedef struct {
+    bool     handover_pending;      ///< an outage is open, awaiting the next join
+    uint32_t handover_start_ts;     ///< timer at the first disconnect of the outage
+    uint16_t handover_duration_ms;  ///< last completed outage in ms, saturating at 0xFFFF
+    uint8_t  handover_seq;          ///< +1 per completed handover
+    uint8_t  handover_reason;       ///< mr_event_tag_t cause of the last handover
+} assoc_vars_metrics_t;
+
 //=========================== variables =======================================
 
-assoc_vars_t assoc_vars = { 0 };
+assoc_vars_t         assoc_vars         = { 0 };
+assoc_vars_metrics_t assoc_vars_metrics = { 0 };
 
 //=========================== prototypes ======================================
 
@@ -163,6 +176,39 @@ bool mr_assoc_is_joined(void) {
     return assoc_vars.state == JOIN_STATE_JOINED;
 }
 
+mr_handover_info_t mr_assoc_get_handover_info(void) {
+    return (mr_handover_info_t){
+        .duration_ms = assoc_vars_metrics.handover_duration_ms,
+        .seq         = assoc_vars_metrics.handover_seq,
+        .reason      = assoc_vars_metrics.handover_reason,
+    };
+}
+
+// open the handover stopwatch on the FIRST disconnect of an outage episode: a
+// failed re-join can fire another disconnect before we reconnect, so keeping the
+// original start + cause makes the measured outage span the whole episode.
+static void mr_assoc_node_mark_handover_start(mr_event_tag_t tag) {
+    if (assoc_vars_metrics.handover_pending) {
+        return;
+    }
+    assoc_vars_metrics.handover_start_ts = mr_timer_hf_now(MARI_TIMER_DEV);
+    assoc_vars_metrics.handover_reason   = (uint8_t)tag;
+    assoc_vars_metrics.handover_pending  = true;
+}
+
+// close the handover stopwatch at the next join. The pending guard skips the
+// initial boot join (a join with no preceding disconnect) and any join not
+// opened by a disconnect.
+static void mr_assoc_node_mark_handover_done(void) {
+    if (!assoc_vars_metrics.handover_pending) {
+        return;
+    }
+    uint32_t elapsed_ms                     = (mr_timer_hf_now(MARI_TIMER_DEV) - assoc_vars_metrics.handover_start_ts) / 1000;
+    assoc_vars_metrics.handover_duration_ms = (elapsed_ms > 0xFFFF) ? 0xFFFF : (uint16_t)elapsed_ms;
+    assoc_vars_metrics.handover_seq++;
+    assoc_vars_metrics.handover_pending = false;
+}
+
 uint16_t mr_assoc_get_network_id(void) {
     if (mari_get_node_type() == MARI_GATEWAY) {
         return assoc_vars.network_id;
@@ -191,6 +237,7 @@ void mr_assoc_node_start_joining(void) {
 
 void mr_assoc_node_handle_joined(uint64_t gateway_id) {
     mr_assoc_set_state(JOIN_STATE_JOINED);
+    mr_assoc_node_mark_handover_done();
     mr_queue_reset();  // clear the queue to avoid sending old packets
     mr_event_data_t event_data = { .data.gateway_info.gateway_id = gateway_id };
     assoc_vars.mari_event_callback(MARI_CONNECTED, event_data);
@@ -333,6 +380,7 @@ void mr_assoc_node_keep_gateway_alive(uint64_t asn) {
 
 void mr_assoc_node_handle_pending_disconnect(void) {
     mr_assoc_set_state(JOIN_STATE_IDLE);
+    mr_assoc_node_mark_handover_start(assoc_vars.is_pending_disconnect);
     mr_scheduler_node_deassign_myself_from_schedule();
     mr_event_data_t event_data = {
         .data.gateway_info.gateway_id = mr_mac_get_synced_gateway(),
@@ -343,6 +391,7 @@ void mr_assoc_node_handle_pending_disconnect(void) {
 
 void mr_assoc_node_handle_immediate_disconnect(mr_event_tag_t tag) {
     mr_assoc_set_state(JOIN_STATE_IDLE);
+    mr_assoc_node_mark_handover_start(tag);
     mr_scheduler_node_deassign_myself_from_schedule();
     mr_event_data_t event_data = {
         .data.gateway_info.gateway_id = mr_mac_get_synced_gateway(),
