@@ -26,6 +26,22 @@ class DefaultPayloadType(IntEnum):
         return bytes([self.value])
 
 
+class HandoverReason(IntEnum):
+    """Reason a node left its gateway, mirror of mr_event_tag_t in
+    firmware/mari/models.h. Reported by the node in the metrics probe so a
+    handover can be classified as a seamless background-scan switch vs a real
+    outage (lost gateway / drift)."""
+
+    NONE = 0
+    HANDOVER = 1  # background-scan handover (found the new gateway before leaving)
+    OUT_OF_SYNC = 2  # drift resync
+    PEER_LOST = 3  # deprecated
+    GATEWAY_FULL = 4
+    PEER_LOST_TIMEOUT = 5  # missed too many slotframes from the gateway
+    PEER_LOST_BLOOM = 6  # gateway beacon no longer lists this node
+    HANDOVER_FAILED = 7
+
+
 class NextProto(IntEnum):
     """Upper-layer protocol multiplex for the mari packet header.
 
@@ -93,6 +109,9 @@ class MetricsProbePayload(Packet):
             PacketFieldMetadata(name="node_tx_dequeued_asn", length=8),
             PacketFieldMetadata(name="rssi_at_node", length=1),
             PacketFieldMetadata(name="rssi_at_gw", length=1),
+            PacketFieldMetadata(name="node_handover_duration_ms", length=2),
+            PacketFieldMetadata(name="node_handover_seq", length=1),
+            PacketFieldMetadata(name="node_handover_reason", length=1),
         ]
     )
     type_: DefaultPayloadType = DefaultPayloadType.METRICS_PROBE
@@ -116,6 +135,9 @@ class MetricsProbePayload(Packet):
     node_tx_dequeued_asn: int = 0
     rssi_at_node: int = 0
     rssi_at_gw: int = 0
+    node_handover_duration_ms: int = 0
+    node_handover_seq: int = 0
+    node_handover_reason: int = 0
 
     @property
     def packet_length(self) -> int:
