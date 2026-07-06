@@ -101,8 +101,8 @@ bool mr_scan_select(mr_channel_info_t *best_channel_info, uint32_t ts_scan_start
             continue;
         }
         // compute average rssi, only including the rssi readings that are not too old
-        int8_t avg_rssi = 0;
-        int8_t n_rssi   = 0;
+        int16_t sum_rssi = 0;  // int16: a sum of int8 readings exceeds the int8 range
+        uint8_t n_rssi   = 0;
         for (size_t j = 0; j < MARI_N_BLE_ADVERTISING_CHANNELS; j++) {
             if (scan_vars.scans[i].channel_info[j].timestamp == 0) {  // no scan info reading here
                 continue;
@@ -114,13 +114,13 @@ bool mr_scan_select(mr_channel_info_t *best_channel_info, uint32_t ts_scan_start
             if (ts_scan_ended - scan_vars.scans[i].channel_info[j].timestamp > MARI_SCAN_OLD_US) {  // scan info is is too old
                 continue;
             }
-            avg_rssi += scan_vars.scans[i].channel_info[j].rssi;
+            sum_rssi += scan_vars.scans[i].channel_info[j].rssi;
             n_rssi++;
         }
         if (n_rssi == 0) {
             continue;
         }
-        avg_rssi /= n_rssi;
+        int8_t avg_rssi = (int8_t)(sum_rssi / n_rssi);
         if (avg_rssi > best_gateway_rssi) {
             best_gateway_rssi = avg_rssi;
             best_gateway_idx  = i;
@@ -130,7 +130,10 @@ bool mr_scan_select(mr_channel_info_t *best_channel_info, uint32_t ts_scan_start
         return false;
     }
     *best_channel_info = _get_channel_info_latest(scan_vars.scans[best_gateway_idx]);
-    // TODO: should probably report the average rssi: best_channel_info->rssi = best_gateway_rssi;
+    // report the cross-channel average rssi (a single latest sample can sit in a
+    // per-channel fade); the beacon/timing fields stay from the latest entry,
+    // which synchronization needs as fresh as possible
+    best_channel_info->rssi = best_gateway_rssi;
     return true;
 }
 
