@@ -149,6 +149,16 @@ typedef enum {
     MARI_HANDOVER_FAILED   = 7,
 } mr_event_tag_t;
 
+// Node-measured handover outage, reported upstream in the metrics probe (see
+// mari_node_get_handover_info). Tracked by the association module on the node's
+// free-running timer, so it is free of ASN re-sync, uplink quantization, and
+// the gateway leave-timeout.
+typedef struct {
+    uint16_t duration_ms;  ///< last outage duration in ms, saturating at 0xFFFF
+    uint8_t  seq;          ///< +1 per completed handover; lets the host dedup
+    uint8_t  reason;       ///< mr_event_tag_t cause of the last handover
+} mr_handover_info_t;
+
 typedef struct {
     uint8_t             len;
     mr_packet_header_t *header;
@@ -266,6 +276,10 @@ typedef struct __attribute__((packed)) {
     uint64_t node_tx_dequeued_asn;  ///< Node TX dequeued ASN (8 bytes)
     int8_t   rssi_at_node;          ///< RSSI at node in dBm (1 byte, signed)
     int8_t   rssi_at_gw;            ///< RSSI at gateway in dBm (1 byte, signed)
+
+    uint16_t node_handover_duration_ms;  ///< Node-measured last handover duration in ms, saturating at 0xFFFF (2 bytes)
+    uint8_t  node_handover_seq;          ///< Node handover counter, +1 per completed handover; lets the host dedup (1 byte)
+    uint8_t  node_handover_reason;       ///< mr_event_tag_t reason for the last handover (1 byte)
 } mr_metrics_payload_t;
 
 //=========================== callbacks =======================================
