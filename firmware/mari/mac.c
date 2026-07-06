@@ -672,7 +672,10 @@ static bool select_gateway_for_handover(uint32_t now_ts, mr_channel_info_t *sele
     // channel per slotframe), so the decision averages a candidate across all
     // channels instead of seeing only the last burst's single-channel sample
     uint32_t sweep_duration_us = MARI_N_BLE_ADVERTISING_CHANNELS * mr_scheduler_get_duration_us();
-    if (!mr_scan_select(selected_gateway, now_ts - sweep_duration_us, now_ts)) {
+    // clamp: right after the timer starts (or wraps) now_ts can be smaller than
+    // the sweep duration, and the unsigned underflow would discard every entry
+    uint32_t sweep_started_ts = now_ts > sweep_duration_us ? now_ts - sweep_duration_us : 0;
+    if (!mr_scan_select(selected_gateway, sweep_started_ts, now_ts)) {
         // no gateway found, do nothing
         return false;
     }
