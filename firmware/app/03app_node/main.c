@@ -92,6 +92,12 @@ static void handle_metrics_payload(mr_metrics_payload_t *metrics_payload) {
     metrics_payload->node_tx_enqueued_asn = mr_mac_get_asn();
     metrics_payload->rssi_at_node         = mr_radio_rssi();
 
+    // report the node's own last-handover measurement (tracked in the mari lib)
+    mr_handover_info_t handover                = mari_node_get_handover_info();
+    metrics_payload->node_handover_duration_ms = handover.duration_ms;
+    metrics_payload->node_handover_seq         = handover.seq;
+    metrics_payload->node_handover_reason      = handover.reason;
+
     // send metrics probe to gateway
     mari_node_tx_payload((uint8_t *)metrics_payload, sizeof(mr_metrics_payload_t), &MARI_TX_INTERNAL);
 }
