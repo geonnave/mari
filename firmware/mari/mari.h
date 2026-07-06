@@ -36,6 +36,9 @@ void     mari_node_tx_payload(uint8_t *payload, uint8_t payload_len, const mari_
 bool     mari_node_is_connected(void);
 uint64_t mari_node_gateway_id(void);
 
+// last handover the node measured on its own clock (see mr_handover_info_t)
+mr_handover_info_t mari_node_get_handover_info(void);
+
 // -------- internal api --------
 bool mr_handle_packet(uint8_t *packet, uint8_t length);
 
