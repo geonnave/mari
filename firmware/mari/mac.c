@@ -660,7 +660,11 @@ static void fix_drift(uint32_t ts) {
 // --------------------- handover --------------------
 
 static bool select_gateway_for_handover(uint32_t now_ts, mr_channel_info_t *selected_gateway) {
-    if (!mr_scan_select(selected_gateway, mac_vars.scan_started_ts, now_ts)) {
+    // select over the full advertising-channel sweep (the bg scan listens on one
+    // channel per slotframe), so the decision averages a candidate across all
+    // channels instead of seeing only the last burst's single-channel sample
+    uint32_t sweep_duration_us = MARI_N_BLE_ADVERTISING_CHANNELS * mr_scheduler_get_duration_us();
+    if (!mr_scan_select(selected_gateway, now_ts - sweep_duration_us, now_ts)) {
         // no gateway found, do nothing
         return false;
     }
