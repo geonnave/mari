@@ -86,8 +86,11 @@ def run_client(host: str, port: int, samples: int, interval: float) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="mari-clock-offset", description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        prog="mari-clock-offset",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     sub = parser.add_subparsers(dest="mode", required=True)
 
     ps = sub.add_parser("server", help="run the reference (responder)")
