@@ -668,6 +668,11 @@ static void fix_drift(uint32_t ts) {
 // --------------------- handover --------------------
 
 static bool select_gateway_for_handover(uint32_t now_ts, mr_channel_info_t *selected_gateway) {
+    if (now_ts - mac_vars.synced_ts < MARI_HANDOVER_MIN_INTERVAL) {
+        // just recently performed a synchronization, will not try again so soon
+        return false;
+    }
+
     // select over the full advertising-channel sweep (the bg scan listens on one
     // channel per slotframe), so the decision averages a candidate across all
     // channels instead of seeing only the last burst's single-channel sample
@@ -687,12 +692,6 @@ static bool select_gateway_for_handover(uint32_t now_ts, mr_channel_info_t *sele
 
     if (selected_gateway->rssi < (mac_vars.synced_gateway_rssi_ewma + MARI_HANDOVER_RSSI_HYSTERESIS)) {
         // the new gateway is not strong enough, ignore it
-        return false;
-    }
-
-    // FIXME: have this be the first condition to be checked; I put it here just for debugging
-    if (now_ts - mac_vars.synced_ts < MARI_HANDOVER_MIN_INTERVAL) {
-        // just recently performed a synchronization, will not try again so soon
         return false;
     }
 
