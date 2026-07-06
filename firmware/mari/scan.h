@@ -25,6 +25,7 @@
 #define MARI_SCAN_OLD_US              (1000 * 1000)      // rssi reading considered old after 1 s (must cover a full advertising-channel sweep: 3 slotframes, ~770 ms on the huge schedule)
 #define MARI_HANDOVER_RSSI_HYSTERESIS (24)               // hysteresis (in dBm) for handover
 #define MARI_HANDOVER_MIN_INTERVAL    (1000 * 1000 * 5)  // minimum interval between handovers (in us)
+#define MARI_HANDOVER_RSSI_EWMA_SHIFT (2)                // serving-gateway rssi smoothing: ewma alpha = 1/2^shift
 
 //=========================== variables =======================================
 
