@@ -100,6 +100,8 @@ typedef struct {
     uint64_t synced_gateway;     ///< ID of the gateway the node is synchronized with
     uint16_t synced_network_id;  ///< Network ID of the gateway the node is synchronized with
     uint32_t synced_ts;          ///< Timestamp of the last synchronization
+
+    int8_t synced_gateway_rssi_ewma;  ///< Smoothed rssi of packets received from the synced gateway; serving side of the handover hysteresis check
 } mac_vars_t;
 
 //=========================== variables ========================================
@@ -610,12 +612,18 @@ static void activity_ri4(uint32_t ts) {
         fix_drift(mac_vars.received_packet.start_ts);
     }
 
-    // store info about the received packet; rssi is used by the handover
-    // hysteresis check below
+    // store info about the received packet
     mac_vars.received_packet.channel = mac_vars.current_slot_info.channel;
     mac_vars.received_packet.rssi    = mr_radio_rssi();
     mac_vars.received_packet.end_ts  = ts;
     mac_vars.received_packet.asn     = mac_vars.asn;
+
+    if (mari_get_node_type() == MARI_NODE && header->src == mac_vars.synced_gateway) {
+        // smooth the serving gateway's rssi for the handover hysteresis check:
+        // a single sample can sit in a per-channel fade, and received_packet
+        // alone may hold a packet from another source (e.g. a foreign beacon)
+        mac_vars.synced_gateway_rssi_ewma += (int8_t)((mac_vars.received_packet.rssi - mac_vars.synced_gateway_rssi_ewma) >> MARI_HANDOVER_RSSI_EWMA_SHIFT);
+    }
 
     mr_handle_packet(mac_vars.received_packet.packet, mac_vars.received_packet.packet_len);
 
@@ -660,7 +668,19 @@ static void fix_drift(uint32_t ts) {
 // --------------------- handover --------------------
 
 static bool select_gateway_for_handover(uint32_t now_ts, mr_channel_info_t *selected_gateway) {
-    if (!mr_scan_select(selected_gateway, mac_vars.scan_started_ts, now_ts)) {
+    if (now_ts - mac_vars.synced_ts < MARI_HANDOVER_MIN_INTERVAL) {
+        // just recently performed a synchronization, will not try again so soon
+        return false;
+    }
+
+    // select over the full advertising-channel sweep (the bg scan listens on one
+    // channel per slotframe), so the decision averages a candidate across all
+    // channels instead of seeing only the last burst's single-channel sample
+    uint32_t sweep_duration_us = MARI_N_BLE_ADVERTISING_CHANNELS * mr_scheduler_get_duration_us();
+    // clamp: right after the timer starts (or wraps) now_ts can be smaller than
+    // the sweep duration, and the unsigned underflow would discard every entry
+    uint32_t sweep_started_ts = now_ts > sweep_duration_us ? now_ts - sweep_duration_us : 0;
+    if (!mr_scan_select(selected_gateway, sweep_started_ts, now_ts)) {
         // no gateway found, do nothing
         return false;
     }
@@ -670,14 +690,8 @@ static bool select_gateway_for_handover(uint32_t now_ts, mr_channel_info_t *sele
         return false;
     }
 
-    if (selected_gateway->rssi < (mac_vars.received_packet.rssi + MARI_HANDOVER_RSSI_HYSTERESIS)) {
+    if (selected_gateway->rssi < (mac_vars.synced_gateway_rssi_ewma + MARI_HANDOVER_RSSI_HYSTERESIS)) {
         // the new gateway is not strong enough, ignore it
-        return false;
-    }
-
-    // FIXME: have this be the first condition to be checked; I put it here just for debugging
-    if (now_ts - mac_vars.synced_ts < MARI_HANDOVER_MIN_INTERVAL) {
-        // just recently performed a synchronization, will not try again so soon
         return false;
     }
 
@@ -752,6 +766,9 @@ static bool sync_to_gateway(uint32_t now_ts, mr_channel_info_t *selected_gateway
     mac_vars.synced_gateway    = selected_gateway->beacon.src;
     mac_vars.synced_network_id = selected_gateway->beacon.network_id;
     mac_vars.synced_ts         = now_ts;
+    // seed the serving-side smoothing from the (cross-channel averaged) rssi
+    // that won the selection; refined on every packet received from the gateway
+    mac_vars.synced_gateway_rssi_ewma = selected_gateway->rssi;
 
     // the selected gateway may have been scanned a few slot_durations ago, so we need to account for that difference
     // NOTE: this assumes that the slot duration is the same for gateways and nodes
