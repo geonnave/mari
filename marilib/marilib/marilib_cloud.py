@@ -4,7 +4,14 @@ from datetime import datetime
 from typing import Any, Callable
 
 from marilib.communication_adapter import MQTTAdapter
-from marilib.mari_protocol import Frame, Header, NextProto
+from marilib.mari_protocol import (
+    DefaultPayloadType,
+    Frame,
+    HandoverReason,
+    Header,
+    MetricsProbePayload,
+    NextProto,
+)
 from marilib.marilib import MarilibBase
 from marilib.metrics import MetricsTester
 from marilib.model import (
@@ -41,6 +48,12 @@ class MarilibCloud(MarilibBase):
     main_file: str | None = None
 
     _proto_handlers: dict[int, Callable[[Frame], None]] = field(default_factory=dict, repr=False)
+    # node_address -> (gateway_address, cloud_ts of last uplink seen); used to
+    # detect cross-gateway handovers from the uplink stream (see _track_uplink)
+    _last_uplink: dict[int, tuple[int, datetime]] = field(default_factory=dict, repr=False)
+    # node_address -> last handover seq reported in its probe; used to log the
+    # node's own handover measurement once per handover (see _track_node_handover)
+    _last_handover_seq: dict[int, int] = field(default_factory=dict, repr=False)
 
     def __post_init__(self):
         self.setup_params = {
@@ -228,6 +241,59 @@ class MarilibCloud(MarilibBase):
         # fallback result in case of error
         return False, EdgeEvent.UNKNOWN, None
 
+    def _track_uplink(self, node_address: int, gateway_address: int) -> None:
+        """Follow each node's serving gateway from its uplink stream and log a
+        HANDOVER_CLOUD when it changes gateways. Downtime is the gap between the
+        node's last uplink via the old gateway and its first via the new one -
+        measured entirely on the cloud clock, so it needs no cross-machine sync
+        and does not depend on the gateway's leave-timeout (unlike NODE_LEFT).
+
+        Tag grammar is kept parallel with HANDOVER_NODE (see _track_node_handover):
+        the shared downtime_s key comes first, perspective-specific fields after."""
+        now = datetime.now()
+        prev = self._last_uplink.get(node_address)
+        self._last_uplink[node_address] = (gateway_address, now)
+        if prev is not None and prev[0] != gateway_address and self.logger:
+            downtime_s = (now - prev[1]).total_seconds()
+            self.logger.log_event(
+                gateway_address,
+                node_address,
+                "HANDOVER_CLOUD",
+                event_tag=f"downtime_s={downtime_s:.3f};from=0x{prev[0]:016X}",
+            )
+
+    def _track_node_handover(
+        self, node_address: int, gateway_address: int, payload: MetricsProbePayload
+    ) -> None:
+        """Log the node's own handover measurement when it reports a new handover
+        sequence number. This is the low-level ground truth - the outage timed on
+        the node's continuous clock (disconnect -> reconnect), free of the uplink
+        quantization and leave-timeout that HANDOVER_CLOUD (see _track_uplink)
+        still carries. The reason tag distinguishes a seamless background-scan
+        switch from a real lost-gateway outage.
+
+        The node repeats the same (duration, seq, reason) on every probe until the
+        next handover, so we dedup on seq and log only on a change. The first probe
+        we see just sets the baseline (a handover before we subscribed is not ours
+        to claim). Called from on_mqtt_data_received after _track_uplink, so
+        HANDOVER_CLOUD is always logged before its HANDOVER_NODE."""
+        seq = payload.node_handover_seq
+        prev = self._last_handover_seq.get(node_address)
+        self._last_handover_seq[node_address] = seq
+        if prev is None or seq == prev or not self.logger:
+            return
+        try:
+            reason = HandoverReason(payload.node_handover_reason).name
+        except ValueError:
+            reason = str(payload.node_handover_reason)
+        downtime_s = payload.node_handover_duration_ms / 1000.0
+        self.logger.log_event(
+            gateway_address,
+            node_address,
+            "HANDOVER_NODE",
+            event_tag=f"downtime_s={downtime_s:.3f};reason={reason};seq={seq}",
+        )
+
     def on_mqtt_data_received(self, data: bytes):
         res, event_type, event_data = self.handle_mqtt_data(data)
         if res:
@@ -236,4 +302,22 @@ class MarilibCloud(MarilibBase):
                 self.logger.log_event(
                     event_data.gateway_address, event_data.address, event_type.name
                 )
+            # follow the uplink stream to catch cross-gateway handovers on one clock
+            if event_type == EdgeEvent.NODE_DATA:
+                self._track_uplink(event_data.header.source, event_data.header.destination)
+                # the node's own measurement rides in the probe: log it after the
+                # uplink tracker, so HANDOVER_CLOUD always precedes HANDOVER_NODE
+                # when a single frame triggers both (a probe that is also the
+                # first uplink seen via the new gateway)
+                if event_data.payload.startswith(DefaultPayloadType.METRICS_PROBE.as_bytes()):
+                    try:
+                        probe = MetricsProbePayload().from_bytes(event_data.payload)
+                    except ValueError:
+                        probe = None
+                    if probe is not None:
+                        self._track_node_handover(
+                            event_data.header.source, event_data.header.destination, probe
+                        )
+            elif event_type == EdgeEvent.NODE_KEEP_ALIVE:
+                self._track_uplink(event_data.address, event_data.gateway_address)
             self.cb_application(event_type, event_data)

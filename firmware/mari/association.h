@@ -31,13 +31,14 @@ typedef enum {
 
 //=========================== prototypes =======================================
 
-void             mr_assoc_init(uint16_t net_id, mr_event_cb_t event_callback);
-void             mr_assoc_set_state(mr_assoc_state_t join_state);
-mr_assoc_state_t mr_assoc_get_state(void);
-bool             mr_assoc_is_joined(void);
-void             mr_assoc_handle_beacon(uint8_t *packet, uint8_t length, uint8_t channel, uint32_t ts);
-void             mr_assoc_handle_packet(uint8_t *packet, uint8_t length);
-uint16_t         mr_assoc_get_network_id(void);
+void               mr_assoc_init(uint16_t net_id, mr_event_cb_t event_callback);
+void               mr_assoc_set_state(mr_assoc_state_t join_state);
+mr_assoc_state_t   mr_assoc_get_state(void);
+bool               mr_assoc_is_joined(void);
+mr_handover_info_t mr_assoc_get_handover_info(void);
+void               mr_assoc_handle_beacon(uint8_t *packet, uint8_t length, uint8_t channel, uint32_t ts);
+void               mr_assoc_handle_packet(uint8_t *packet, uint8_t length);
+uint16_t           mr_assoc_get_network_id(void);
 
 void mr_assoc_node_handle_synced(void);
 bool mr_assoc_node_ready_to_join(void);

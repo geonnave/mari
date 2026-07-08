@@ -108,6 +108,10 @@ uint64_t mari_node_gateway_id(void) {
     return mr_mac_get_synced_gateway();
 }
 
+mr_handover_info_t mari_node_get_handover_info(void) {
+    return mr_assoc_get_handover_info();
+}
+
 //=========================== iternal api =====================================
 
 void mr_mari_force_gateway_startup_random_delay(void) {
