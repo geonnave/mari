@@ -97,13 +97,34 @@ def on_event(event: EdgeEvent, event_data: MariNode | Frame | GatewayInfo):
     help="Send periodic packet every N seconds (0 = disabled)",
 )
 @click.option(
+    "--metrics-probe-interval",
+    "-i",
+    type=float,
+    default=5.0,
+    show_default=True,
+    help=(
+        "Seconds between probes to the same node (max 10). Probes are unicast "
+        "downlink traffic, so they consume the same D slots as --load: at N "
+        "nodes the probe stream offers N/interval packets/s against the "
+        "schedule's downlink capacity (huge 85.6/s, big 91.9, medium 86.6, "
+        "tiny 68.2). Keep that share small, or the measurement becomes the load."
+    ),
+)
+@click.option(
     "--log-dir",
     default="logs",
     show_default=True,
     help="Directory to save metric log files.",
     type=click.Path(),
 )
-def main(port: str | None, mqtt_host: str, load: int, send_periodic: float, log_dir: str):
+def main(
+    port: str | None,
+    mqtt_host: str,
+    load: int,
+    send_periodic: float,
+    metrics_probe_interval: float,
+    log_dir: str,
+):
     if not (0 <= load <= 100):
         sys.stderr.write("Error: --load must be between 0 and 100.\n")
         return
@@ -121,8 +142,19 @@ def main(port: str | None, mqtt_host: str, load: int, send_periodic: float, log_
         logger=logger,
         main_file=__file__,
         tui=MarilibTUIEdge(test_state=test_state),
-        metrics_probe_period=1.0,  # use a relatively frequent probe period to get more stats
+        metrics_probe_period=metrics_probe_interval,
     )
+
+    # Record the knobs that define the scenario, so a run folder is
+    # self-describing and does not depend on how its directory was named.
+    mari.setup_params.update(
+        {
+            "load_percent": load,
+            "metrics_probe_interval_s": metrics_probe_interval,
+            "send_periodic_s": send_periodic,
+        }
+    )
+    logger.log_setup_parameters(mari.setup_params)
 
     stop_event = threading.Event()
 
