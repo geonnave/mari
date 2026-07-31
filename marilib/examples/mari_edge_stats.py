@@ -213,6 +213,7 @@ def main(
 
     test_state = TestState(
         load=load,
+        probe_load=probe_load,
     )
 
     logger = MetricsLogger(log_dir_base=log_dir, rotation_interval_minutes=1440)
@@ -248,6 +249,8 @@ def main(
             )
             return
         mari.metrics_tester.set_interval(metrics_probe_interval)
+        if metrics_probe_interval is not None:
+            test_state.probe_load = probe_load
         print(
             f"[yellow]Probe interval {metrics_probe_interval:.2f} s "
             f"= {probe_load:.0f}% of downlink on the "

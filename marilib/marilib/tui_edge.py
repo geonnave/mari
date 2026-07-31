@@ -22,6 +22,26 @@ if TYPE_CHECKING:
 QUEUE_DEPTH_WARN_SF = 2.0
 QUEUE_DEPTH_BAD_SF = 4.0
 
+# Per-node RSSI (dBm) thresholds for coloring the link-quality value.
+# RSSI is negative; more negative = weaker. At or below BAD we color the
+# value red (poor link), between WARN and BAD yellow, above WARN plain.
+RSSI_WARN_DBM = -60  # weaker than this -> yellow
+RSSI_BAD_DBM = -70  # weaker than this -> red
+
+
+def _rssi_cell(dbm: "float | None") -> str:
+    """Format an RSSI value (dBm) with color: red for weak links
+    (<= RSSI_BAD_DBM), yellow for marginal (<= RSSI_WARN_DBM), plain
+    otherwise. Returns '...' when no sample is available."""
+    if dbm is None:
+        return "..."
+    val = f"{dbm:.0f}"
+    if dbm <= RSSI_BAD_DBM:
+        return f"[red]{val}[/red]"
+    if dbm <= RSSI_WARN_DBM:
+        return f"[yellow]{val}[/yellow]"
+    return val
+
 
 class MarilibTUIEdge(MarilibTUI):
     """A Text-based User Interface for MarilibEdge."""
@@ -207,6 +227,27 @@ class MarilibTUIEdge(MarilibTUI):
             status.append(f"{self.test_state.load}% of {self.test_state.rate} pps")
             status.append("  |  ")
 
+        # Probe budget vs what the probes are actually sending. The measured
+        # rate counts retries, so it runs above target when probes are timing
+        # out - which is the case where the link is carrying more than the
+        # requested load and the latency series is being censored.
+        if self.test_state and self.test_state.probe_load > 0 and self.test_state.rate > 0:
+            measured = mari.metrics_tester.probe_rate_hz() if mari.metrics_tester else 0.0
+            measured_pct = 100.0 * measured / self.test_state.rate
+            over = measured_pct > self.test_state.probe_load * 1.25
+            status.append("Probe: ")
+            status.append(
+                f"{self.test_state.probe_load:.0f}% target",
+            )
+            status.append(" / ")
+            status.append(
+                f"{measured:.1f} pps = {measured_pct:.0f}%",
+                style="yellow" if over else "",
+            )
+            if over:
+                status.append(" (retrying)", style="yellow")
+            status.append("  |  ")
+
         stats = mari.gateway.stats
         status.append(f"Frames TX: {stats.sent_count(include_test_packets=True)}  |  ")
         status.append(f"Frames RX: {stats.received_count(include_test_packets=True)}  |  ")
@@ -345,14 +386,8 @@ class MarilibTUIEdge(MarilibTUI):
             else:
                 pdr_up_gw_edge_str = "..."
 
-            rssi_node_str = (
-                f"{node.stats_rssi_node_dbm():.0f}"
-                if node.stats_rssi_node_dbm() is not None
-                else "..."
-            )
-            rssi_gw_str = (
-                f"{node.stats_rssi_gw_dbm():.0f}" if node.stats_rssi_gw_dbm() is not None else "..."
-            )
+            rssi_node_str = _rssi_cell(node.stats_rssi_node_dbm())
+            rssi_gw_str = _rssi_cell(node.stats_rssi_gw_dbm())
 
             table.add_row(
                 f"0x{node.address:016X}",

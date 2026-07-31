@@ -1,5 +1,6 @@
 import threading
 import time
+from collections import deque
 from typing import TYPE_CHECKING
 
 from rich import print
@@ -63,6 +64,12 @@ class MetricsTester:
         self.set_interval(interval)
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
+        # Monotonic timestamps of recent probe transmissions, for the measured
+        # send rate. Retries are counted, which is the point: the nominal rate
+        # (nodes / interval) understates the link's real probe load whenever
+        # probes are timing out. deque append/popleft are thread-safe, so the
+        # TUI can read this while the tester thread writes.
+        self._sent_ts: deque[float] = deque(maxlen=4096)
 
     def set_interval(self, interval: float):
         if interval < 0 or interval > MARI_PROBE_STATS_MAX_LEN:
@@ -153,9 +160,22 @@ class MetricsTester:
         edge_tx_ts_us = self.marilib.send_probe(node.address, payload_bytes)
         if edge_tx_ts_us is None:
             return None
+        self._sent_ts.append(time.monotonic())
         with self.marilib.lock:
             self._register_pending_probe(node, edge_tx_ts_us, edge_tx_ts_us, retry_count)
         return edge_tx_ts_us
+
+    def probe_rate_hz(self, window_s: float = 10.0) -> float:
+        """Measured probe transmissions per second over the last `window_s`.
+
+        Measured rather than nominal, so retries after a timeout show up. A
+        reading well above nodes/interval means probes are being retransmitted,
+        which puts more on the downlink than the requested probe share.
+        """
+        now = time.monotonic()
+        while self._sent_ts and now - self._sent_ts[0] > window_s:
+            self._sent_ts.popleft()
+        return len(self._sent_ts) / window_s
 
     def _send_edge_probe(self, node: MariNode) -> None:
         """Send a probe if the node has no pending one."""
