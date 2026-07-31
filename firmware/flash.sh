@@ -32,14 +32,22 @@
 # for.
 #
 # Usage:
-#   ./flash.sh <node|gateway> --all              flash every matching connected board
-#   ./flash.sh <node|gateway> <snr> [<snr> ...]  flash specific J-Link serials
-#   ./flash.sh <node|gateway>                    list connected devices, then exit
+#   ./flash.sh <node|gateway|both> --all              flash every matching connected board
+#   ./flash.sh <node|gateway|both> <snr> [<snr> ...]  flash specific J-Link serials
+#   ./flash.sh <node|gateway|both>                    list connected devices, then exit
+#
+# `both` runs the gateway pass then the node pass with the same options. Since
+# each pass only touches its own family, `./flash.sh both --all --build` builds
+# and flashes everything connected in one command, routing each board by the
+# family it reports.
 #
 # Options:
 #   --hex <file>      node only:    flash this hex instead of the default
 #   --app-hex <file>  gateway only: app-core hex override
 #   --net-hex <file>  gateway only: net-core hex override
+#   --erase-only      erase only: recover the targets and stop, no programming.
+#                     On the dual-core gateway that is both cores, which is the
+#                     pair of nrfjprog calls you would otherwise run by hand.
 #   --build           (re)build the role first (default: flash only, no compile)
 #   --recover         force a clean-slate recover before flashing
 #   --no-recover      skip recover even on the gateway (which recovers by default)
@@ -59,6 +67,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FW_DIR="$SCRIPT_DIR"
 
 DO_BUILD=0
+ERASE=0
 FORCE=0
 DRY_RUN=0
 RECOVER=0
@@ -69,10 +78,12 @@ HEX_NODE=""
 HEX_APP=""
 HEX_NET=""
 TARGETS=()
+PASSTHRU=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --build)      DO_BUILD=1 ;;
+    --erase-only) ERASE=1 ;;
     --recover)    RECOVER=1 ;;
     --no-recover) NO_RECOVER=1 ;;
     --force)      FORCE=1 ;;
@@ -85,21 +96,53 @@ while [[ $# -gt 0 ]]; do
     --net-hex)    shift; HEX_NET="${1:-}"; [[ -z "$HEX_NET" ]] && { echo "Error: --net-hex needs a path" >&2; exit 2; } ;;
     --net-hex=*)  HEX_NET="${1#--net-hex=}" ;;
     -h|--help)    awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$0"; exit 0 ;;
-    node|gateway) [[ -n "$ROLE" ]] && { echo "Error: role already set to '$ROLE'" >&2; exit 2; }; ROLE="$1" ;;
+    node|gateway|both) [[ -n "$ROLE" ]] && { echo "Error: role already set to '$ROLE'" >&2; exit 2; }; ROLE="$1" ;;
     -*)           echo "Unknown option: $1" >&2; exit 2 ;;
     *)            TARGETS+=("$1") ;;
+  esac
+  # Everything except the role is replayed verbatim by the `both` pass below.
+  case "$1" in
+    node|gateway|both) ;;
+    *) PASSTHRU+=("$1") ;;
   esac
   shift
 done
 
 if [[ -z "$ROLE" ]]; then
-  echo "Error: first argument must be a role: node | gateway" >&2
-  echo "  e.g. ./flash.sh node --all   /   ./flash.sh gateway <snr>" >&2
+  echo "Error: first argument must be a role: node | gateway | both" >&2
+  echo "  e.g. ./flash.sh node --all   /   ./flash.sh both --all --build" >&2
   exit 2
+fi
+
+# `both` is the two passes back to back. Re-invoking rather than looping inside
+# keeps every per-role code path below exactly as it is when run alone, and the
+# family guard means each board is picked up by the pass that matches it.
+# set -e stops at the first failing pass.
+if [[ "$ROLE" == both ]]; then
+  for r in gateway node; do
+    echo "================================ $r ================================"
+    if [[ ${#PASSTHRU[@]} -gt 0 ]]; then
+      "$0" "$r" "${PASSTHRU[@]}"
+    else
+      "$0" "$r"
+    fi
+    echo
+  done
+  exit 0
 fi
 
 if [[ "$RECOVER" -eq 1 && "$NO_RECOVER" -eq 1 ]]; then
   echo "Error: --recover and --no-recover are mutually exclusive" >&2
+  exit 2
+fi
+
+if [[ "$ERASE" -eq 1 && "$NO_RECOVER" -eq 1 ]]; then
+  echo "Error: --erase-only and --no-recover contradict each other" >&2
+  exit 2
+fi
+
+if [[ "$ERASE" -eq 1 && "$DO_BUILD" -eq 1 ]]; then
+  echo "Error: --erase-only does not program anything, so --build has nothing to do" >&2
   exit 2
 fi
 
@@ -190,26 +233,44 @@ else
 fi
 
 # Build the role (unless skipped).
-if [[ "$DO_BUILD" -eq 1 ]]; then
+if [[ "$DO_BUILD" -eq 1 && "$ERASE" -eq 0 ]]; then
   echo "Building Mari $ROLE ($BUILD_CONFIG) ..."
   SEGGER_DIR="$SEGGER_DIR" BUILD_CONFIG="$BUILD_CONFIG" make -C "$FW_DIR" "$MAKE_TARGET"
 fi
 
-# Hex presence check.
-for h in "$HEX_APP" $HEX_NET; do
-  if [[ ! -f "$h" ]]; then
-    echo "Error: hex not found: $h" >&2
-    echo "       (pass an explicit hex, or --build to compile it first)" >&2
-    exit 1
-  fi
-done
+# Hex presence check. Skipped when erasing: there is nothing to program, and
+# requiring a build artifact to wipe a board would be nonsense.
+if [[ "$ERASE" -eq 0 ]]; then
+  for h in "$HEX_APP" $HEX_NET; do
+    if [[ ! -f "$h" ]]; then
+      echo "Error: hex not found: $h" >&2
+      echo "       (pass an explicit hex, or --build to compile it first)" >&2
+      exit 1
+    fi
+  done
+fi
+
+# Identify each image by name AND content: two builds of the same source land
+# at the same path, so only the checksum tells you whether the boards in front
+# of you are running the same binary.
+hex_line() {
+  printf '  %-9s %s\n' "$1" "$(basename "$2")"
+  printf '            %s  %s\n' "$(shasum -a 256 "$2" | cut -c1-16)" "$(dirname "$2")"
+}
 
 echo
-echo "Flash plan:"
-echo "  role:    $ROLE ($NRF_FAMILY)"
-echo "  app hex: $HEX_APP"
-[[ -n "$HEX_NET" ]] && echo "  net hex: $HEX_NET"
-echo "  targets: ${TO_FLASH[*]}"
+if [[ "$ERASE" -eq 1 ]]; then
+  echo "Erase plan:"
+  echo "  role:     $ROLE ($NRF_FAMILY)"
+  echo "  action:   full chip erase$([[ "$MULTICORE" -eq 1 ]] && echo ' on BOTH cores'), no programming"
+  echo "  targets:  ${TO_FLASH[*]}"
+else
+  echo "Flash plan:"
+  echo "  role:     $ROLE ($NRF_FAMILY)"
+  hex_line "app hex:" "$HEX_APP"
+  [[ -n "$HEX_NET" ]] && hex_line "net hex:" "$HEX_NET"
+  echo "  targets:  ${TO_FLASH[*]}"
+fi
 echo
 
 # Run a command, or just print it under --dry-run.
@@ -234,6 +295,7 @@ recover_target() {
 }
 
 FLASHED=0
+ERASED=0
 SKIPPED=0
 for snr in "${TO_FLASH[@]}"; do
   fam="$(nrfjprog --snr "$snr" --deviceversion 2>/dev/null || echo 'UNKNOWN')"
@@ -246,9 +308,11 @@ for snr in "${TO_FLASH[@]}"; do
     continue
   fi
 
-  # Decide whether to recover.
+  # Decide whether to recover. --erase-only is exactly "recover and stop".
   recover_this=0
-  if [[ "$NO_RECOVER" -eq 1 ]]; then
+  if [[ "$ERASE" -eq 1 ]]; then
+    recover_this=1
+  elif [[ "$NO_RECOVER" -eq 1 ]]; then
     recover_this=0
     [[ "$fam" == UNKNOWN ]] && echo "WARN $snr: locked (APPROTECT?) and --no-recover given; flashing will likely fail."
   elif [[ "$RECOVER" -eq 1 ]]; then
@@ -277,6 +341,11 @@ for snr in "${TO_FLASH[@]}"; do
     continue
   fi
 
+  if [[ "$ERASE" -eq 1 ]]; then
+    ERASED=$((ERASED + 1))
+    continue
+  fi
+
   echo "Flashing $snr ($fam) as $ROLE ..."
   if [[ "$MULTICORE" -eq 1 ]]; then
     # App core first, then net core - mirrors dotbot device's gateway flow.
@@ -289,4 +358,8 @@ for snr in "${TO_FLASH[@]}"; do
 done
 
 echo
-echo "Done. flashed=$FLASHED skipped=$SKIPPED"
+if [[ "$ERASE" -eq 1 ]]; then
+  echo "Done. erased=$ERASED skipped=$SKIPPED"
+else
+  echo "Done. flashed=$FLASHED skipped=$SKIPPED"
+fi
