@@ -166,6 +166,13 @@ class MetricsLogger:
             self.log_gateway_metrics(gateway)
             self.log_all_nodes_metrics(nodes)
             self.last_log_time[gateway.info.address] = datetime.now()
+            # Flush at the sampling rate, as log_events.csv already does. Two
+            # reasons: a run becomes readable while it is still going, and a
+            # process that dies without running close() still leaves its data
+            # behind instead of an empty file.
+            for f in (self._gateway_file, self._nodes_file):
+                if f and not f.closed:
+                    f.flush()
 
     def log_gateway_metrics(self, gateway: MariGateway):
         if not self._log_common() or self._gateway_writer is None:
