@@ -244,13 +244,24 @@ class MetricsTester:
             return
 
         rx_ts = rx_ts_us if rx_ts_us is not None else self.timestamp_us()
-        pending = self._complete_pending_probe(node, payload.edge_tx_ts_us, rx_ts)
-        if pending is None:
-            # Stale reply (e.g. after timeout/retry): skip probe_stats — RTT would be bogus.
-            return None
 
+        # Stamp before matching. A reply that arrives after its timeout has no
+        # pending entry left, but it did arrive, so edge_rx_ts_us and
+        # edge_rx_count are both known and both belong on the wire: the frame
+        # is forwarded to the cloud right after this returns, and an unstamped
+        # edge_rx_ts_us of 0 makes latency_roundtrip_node_edge_ms() read as a
+        # large negative value there. Counting every reply in edge_rx_count
+        # also makes pdr_uplink_uart (edge_rx vs gw_rx) count what it names.
         payload.edge_rx_ts_us = rx_ts
         payload.edge_rx_count = node.probe_increment_rx_count()
+
+        pending = self._complete_pending_probe(node, payload.edge_tx_ts_us, rx_ts)
+        if pending is None:
+            # Late reply: check_timeouts already recorded this probe as a
+            # timeout in the effective-latency samples, so keep it out of
+            # probe_stats rather than counting one probe twice. Returned
+            # stamped so the cloud still sees its true round trip.
+            return payload
 
         node.save_probe_stats(payload)
 

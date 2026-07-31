@@ -328,34 +328,32 @@ class MariNode:
         return self.probe_stats_latest.rssi_at_gw_dbm()
 
     def stats_avg_latency_roundtrip_node_edge_ms(self) -> float:
-        """Average latency between node and edge in milliseconds"""
-        # compute average latency between node and edge, using all probe stats
+        """Average latency between node and edge in milliseconds.
+
+        Non-positive samples are skipped: a probe whose edge_rx_ts_us was
+        never stamped reads as a large negative round trip and would swamp
+        the mean."""
         if not self.probe_stats:
             return 0
-        return sum(p.latency_roundtrip_node_edge_ms() for p in self.probe_stats) / len(
-            self.probe_stats
-        )
+        return self._avg_nonzero([p.latency_roundtrip_node_edge_ms() for p in self.probe_stats])
 
     def stats_avg_latency_roundtrip_node_cloud_ms(self) -> float:
         """Average latency between node and cloud in milliseconds"""
         if not self.probe_stats:
             return 0
-        return sum(p.latency_roundtrip_node_cloud_ms() for p in self.probe_stats) / len(
-            self.probe_stats
-        )
+        return self._avg_nonzero([p.latency_roundtrip_node_cloud_ms() for p in self.probe_stats])
 
     def stats_latest_latency_roundtrip_node_edge_ms(self) -> float:
         """Last latency between node and edge in milliseconds"""
-        # compute average latency between node and edge, using all probe stats
         if not self.probe_stats:
             return 0
-        return self.probe_stats_latest.latency_roundtrip_node_edge_ms()
+        return max(0.0, self.probe_stats_latest.latency_roundtrip_node_edge_ms())
 
     def stats_latest_latency_roundtrip_node_cloud_ms(self) -> float:
         """Last latency between node and cloud in milliseconds"""
         if not self.probe_stats:
             return 0
-        return self.probe_stats_latest.latency_roundtrip_node_cloud_ms()
+        return max(0.0, self.probe_stats_latest.latency_roundtrip_node_cloud_ms())
 
     # ASN-decomposed latency aggregates. Each averages over the
     # probe_stats deque, ignoring samples where the relevant ASN pair
