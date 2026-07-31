@@ -14,9 +14,11 @@
 #   ./build-schedules.sh tiny huge             # just these
 #   ./flash.sh gateway --all --net-hex Output/schedules/03app_gateway_net-tiny.hex
 #
-# main.c is edited in place and restored by an EXIT trap, so an interrupted run
-# does not leave the source pointing at the wrong schedule. It refuses to start
-# if the file is already modified, rather than restoring someone else's edit.
+# main.c is edited in place and restored byte-for-byte from a copy taken up
+# front, via an EXIT trap, so an interrupted run does not leave the source
+# pointing at the wrong schedule. Uncommitted edits are preserved, not
+# discarded - the bench net id lives in this very file, so that is the normal
+# case rather than the exception.
 #
 # Env:
 #   SEGGER_DIR    SES install (default: /opt/segger)
@@ -42,17 +44,19 @@ for s in "${SCHEDULES[@]}"; do
   esac
 done
 
-# Refuse to touch a file someone else is already editing: the restore below
-# would silently revert their change.
-if ! git -C "$FW_DIR" diff --quiet -- "$MAIN" 2>/dev/null; then
-  echo "Error: $(basename "$MAIN") has uncommitted changes." >&2
-  echo "       This script rewrites and restores it, which would discard them." >&2
-  exit 1
-fi
-
+# Snapshot before touching anything. The restore is byte-for-byte from this
+# copy, so whatever state main.c was in - including the uncommitted net id it
+# normally carries - comes back exactly.
 ORIGINAL="$(mktemp)"
 cp "$MAIN" "$ORIGINAL"
-restore() { cp "$ORIGINAL" "$MAIN"; rm -f "$ORIGINAL"; }
+restore() {
+  cp "$ORIGINAL" "$MAIN" 2>/dev/null || true
+  if cmp -s "$ORIGINAL" "$MAIN"; then
+    rm -f "$ORIGINAL"
+  else
+    echo "WARNING: could not restore $MAIN. Your original is at $ORIGINAL" >&2
+  fi
+}
 trap restore EXIT
 
 mkdir -p "$OUT_DIR"
