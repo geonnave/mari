@@ -11,15 +11,19 @@ from marilib.tui_edge import MarilibTUIEdge
 from marilib.marilib_edge import MarilibEdge
 
 
-def mqtt_credentials() -> tuple[str | None, str | None]:
-    """MQTT username and password from the environment.
+def mqtt_credentials() -> dict[str, str | None]:
+    """MQTT username and password from the environment, as kwargs.
 
     Same variable names as the `dotbot` CLI, so one export serves both.
-    Keeping credentials out of the URL keeps them out of shell history and
-    out of any command a run sheet reproduces; MQTTAdapter.from_url still
-    accepts the `mqtts://user:pass@host` form when that is easier.
+    Returned as a dict for `**` splatting: positional unpacking collides with
+    `is_edge` at every call site. Keeping credentials out of the URL keeps
+    them out of shell history and out of any command a run sheet reproduces;
+    MQTTAdapter.from_url still accepts the `mqtts://user:pass@host` form.
     """
-    return os.environ.get("DOTBOT_MQTT_USER"), os.environ.get("DOTBOT_MQTT_PASS")
+    return {
+        "username": os.environ.get("DOTBOT_MQTT_USER"),
+        "password": os.environ.get("DOTBOT_MQTT_PASS"),
+    }
 
 
 def on_event(event: EdgeEvent, event_data: MariNode | Frame):
@@ -68,7 +72,7 @@ def main(port: str | None, mqtt_url: str, metrics_probe_interval: float, log_dir
         on_event,
         serial_interface=SerialAdapter(port),
         mqtt_interface=(
-            MQTTAdapter.from_url(mqtt_url, is_edge=True, *mqtt_credentials())
+            MQTTAdapter.from_url(mqtt_url, is_edge=True, **mqtt_credentials())
             if mqtt_url
             else None
         ),

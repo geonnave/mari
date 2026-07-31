@@ -237,7 +237,7 @@ class MarilibTUIEdge(MarilibTUI):
             over = measured_pct > self.test_state.probe_load * 1.25
             status.append("Probe: ")
             status.append(
-                f"{self.test_state.probe_load:.0f}% target",
+                f"{self.test_state.probe_load:.0f}% @ {self.test_state.probe_interval:.1f}s",
             )
             status.append(" / ")
             status.append(

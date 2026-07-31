@@ -223,7 +223,7 @@ def main(
         on_event,
         serial_interface=SerialAdapter(port),
         mqtt_interface=(
-            MQTTAdapter.from_url(mqtt_host, is_edge=True, *mqtt_credentials()) if mqtt_host else None
+            MQTTAdapter.from_url(mqtt_host, is_edge=True, **mqtt_credentials()) if mqtt_host else None
         ),
         logger=logger,
         main_file=__file__,
@@ -234,47 +234,27 @@ def main(
         metrics_probe_period=metrics_probe_interval or 10.0,
     )
 
-    if metrics_probe_interval is None:
-        # Wait for the schedule, then fix the cadence for the rest of the run.
-        # No probes go out meanwhile: the tester skips every cycle while the
-        # node list is empty, and nodes cannot join before the gateway is up.
-        deadline = time.monotonic() + 10.0
-        while time.monotonic() < deadline:
-            metrics_probe_interval = probe_interval_for_share(mari, probe_load)
-            if metrics_probe_interval is not None:
-                break
-            mari.update()
-            time.sleep(0.2)
-        if metrics_probe_interval is None:
-            sys.stderr.write(
-                "Error: gateway did not report a known schedule within 10 s, so the "
-                "probe interval could not be derived. Pass -i explicitly.\n"
-            )
-            return
-        mari.metrics_tester.set_interval(metrics_probe_interval)
-        if metrics_probe_interval is not None:
-            test_state.probe_load = probe_load
-        print(
-            f"[yellow]Probe interval {metrics_probe_interval:.2f} s "
-            f"= {probe_load:.0f}% of downlink on the "
-            f"{mari.gateway.info.schedule_name} schedule.[/]"
-        )
-
     # Record the knobs that define the scenario, so a run folder is
     # self-describing and does not depend on how its directory was named.
+    # metrics_probe_interval_s is filled in once the cadence is known.
     mari.setup_params.update(
         {
             "load_percent": load,
             "probe_load_percent": probe_load,
-            "metrics_probe_interval_s": round(metrics_probe_interval, 3),
             "send_periodic_s": send_periodic,
         }
     )
+    if metrics_probe_interval is not None:
+        mari.setup_params["metrics_probe_interval_s"] = round(metrics_probe_interval, 3)
+        test_state.probe_interval = metrics_probe_interval
+        test_state.probe_load = 0.0  # an explicit -i is not a share
     logger.log_setup_parameters(mari.setup_params)
 
     stop_event = threading.Event()
 
-    load_tester = LoadTester(mari, test_state, stop_event, probe_interval=metrics_probe_interval)
+    load_tester = LoadTester(
+        mari, test_state, stop_event, probe_interval=metrics_probe_interval or 0.0
+    )
     if load > 0:
         load_tester.start()
 
@@ -287,6 +267,23 @@ def main(
             current_time = time.monotonic()
 
             mari.update()
+
+            # Derive the probe cadence from the gateway's schedule the moment it
+            # is known. Done here rather than by blocking at startup: GATEWAY_INFO
+            # arrives asynchronously over serial and can take longer than any
+            # deadline worth failing a run over. Until then the tester runs at the
+            # placeholder rate, which costs nothing - it skips every cycle while no
+            # node has joined, and a node cannot join a gateway that has not
+            # beaconed its schedule.
+            if metrics_probe_interval is None:
+                derived = probe_interval_for_share(mari, probe_load)
+                if derived is not None:
+                    metrics_probe_interval = derived
+                    mari.metrics_tester.set_interval(derived)
+                    load_tester.probe_interval = derived
+                    test_state.probe_interval = derived
+                    mari.setup_params["metrics_probe_interval_s"] = round(derived, 3)
+                    logger.log_setup_parameters(mari.setup_params)
 
             mari.render_tui()
 
