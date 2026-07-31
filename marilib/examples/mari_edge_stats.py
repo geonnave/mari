@@ -9,6 +9,7 @@ from marilib.marilib_edge import MarilibEdge
 from marilib.model import SCHEDULES, EdgeEvent, GatewayInfo, MariNode, TestState
 from marilib.serial_uart import get_default_port
 from marilib.tui_edge import MarilibTUIEdge
+from marilib.cli.edge import mqtt_credentials
 from marilib.communication_adapter import SerialAdapter, MQTTAdapter
 
 
@@ -221,7 +222,9 @@ def main(
     mari = MarilibEdge(
         on_event,
         serial_interface=SerialAdapter(port),
-        mqtt_interface=MQTTAdapter.from_url(mqtt_host, is_edge=True) if mqtt_host else None,
+        mqtt_interface=(
+            MQTTAdapter.from_url(mqtt_host, is_edge=True, *mqtt_credentials()) if mqtt_host else None
+        ),
         logger=logger,
         main_file=__file__,
         tui=MarilibTUIEdge(test_state=test_state),

@@ -1,3 +1,4 @@
+import os
 import time
 
 import click
@@ -7,6 +8,17 @@ from marilib.model import EdgeEvent, GatewayInfo, MariNode
 from marilib.communication_adapter import MQTTAdapter
 from marilib.tui_cloud import MarilibTUICloud
 from marilib.logger import MetricsLogger
+
+
+def mqtt_credentials() -> tuple[str | None, str | None]:
+    """MQTT username and password from the environment.
+
+    Same variable names as the `dotbot` CLI, so one export serves both.
+    Keeping credentials out of the URL keeps them out of shell history and
+    out of any command a run sheet reproduces; MQTTAdapter.from_url still
+    accepts the `mqtts://user:pass@host` form when that is easier.
+    """
+    return os.environ.get("DOTBOT_MQTT_USER"), os.environ.get("DOTBOT_MQTT_PASS")
 
 
 def on_event(event: EdgeEvent, event_data: MariNode | Frame | GatewayInfo):
@@ -58,7 +70,7 @@ def main(mqtt_url: str, network_id: int, send_periodic: float, log_dir: str, max
 
     mari = MarilibCloud(
         on_event,
-        mqtt_interface=MQTTAdapter.from_url(mqtt_url, is_edge=False),
+        mqtt_interface=MQTTAdapter.from_url(mqtt_url, is_edge=False, *mqtt_credentials()),
         logger=MetricsLogger(
             log_dir_base=log_dir, rotation_interval_minutes=1440, log_interval_seconds=1.0
         ),
