@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+#
+# build-schedules.sh - build one gateway net-core image per schedule.
+#
+# The gateway's schedule is a compile-time pointer (03app_gateway_net/main.c,
+# `schedule_app`), so switching it means a rebuild. Nodes do not: they adopt
+# whatever the beacon advertises (mari/mac.c, sync_to_gateway ->
+# mr_scheduler_set_schedule), so only the gateway is ever reflashed.
+#
+# Building takes minutes and flashing takes seconds, so build all of them once
+# and flash from the cache during a campaign:
+#
+#   ./build-schedules.sh                       # all four, into Output/schedules/
+#   ./build-schedules.sh tiny huge             # just these
+#   ./flash.sh gateway --all --net-hex Output/schedules/03app_gateway_net-tiny.hex
+#
+# main.c is edited in place and restored by an EXIT trap, so an interrupted run
+# does not leave the source pointing at the wrong schedule. It refuses to start
+# if the file is already modified, rather than restoring someone else's edit.
+#
+# Env:
+#   SEGGER_DIR    SES install (default: /opt/segger)
+#   BUILD_CONFIG  SES config (default: Debug)
+
+set -euo pipefail
+
+SEGGER_DIR="${SEGGER_DIR:-/opt/segger}"
+BUILD_CONFIG="${BUILD_CONFIG:-Debug}"
+
+FW_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MAIN="$FW_DIR/app/03app_gateway_net/main.c"
+OUT_DIR="$FW_DIR/Output/schedules"
+BUILT_HEX="$FW_DIR/app/03app_gateway_net/Output/nrf5340-net/$BUILD_CONFIG/Exe/03app_gateway_net-nrf5340-net.hex"
+
+SCHEDULES=("$@")
+[[ ${#SCHEDULES[@]} -eq 0 ]] && SCHEDULES=(tiny medium big huge)
+
+for s in "${SCHEDULES[@]}"; do
+  case "$s" in
+    tiny|medium|big|huge) ;;
+    *) echo "Error: unknown schedule '$s' (tiny|medium|big|huge)" >&2; exit 2 ;;
+  esac
+done
+
+# Refuse to touch a file someone else is already editing: the restore below
+# would silently revert their change.
+if ! git -C "$FW_DIR" diff --quiet -- "$MAIN" 2>/dev/null; then
+  echo "Error: $(basename "$MAIN") has uncommitted changes." >&2
+  echo "       This script rewrites and restores it, which would discard them." >&2
+  exit 1
+fi
+
+ORIGINAL="$(mktemp)"
+cp "$MAIN" "$ORIGINAL"
+restore() { cp "$ORIGINAL" "$MAIN"; rm -f "$ORIGINAL"; }
+trap restore EXIT
+
+mkdir -p "$OUT_DIR"
+echo "Building ${#SCHEDULES[@]} gateway net-core image(s) into $OUT_DIR"
+echo
+
+for sched in "${SCHEDULES[@]}"; do
+  echo "=== $sched ==="
+  # Only the schedule_app line: a blanket substitution would also rewrite the
+  # extern declaration on the line above it.
+  sed -i '' -E "s/^(schedule_t[[:space:]]+\*schedule_app[[:space:]]*=[[:space:]]*&)schedule_[a-z]+;/\1schedule_${sched};/" "$MAIN"
+  if ! grep -qE "^schedule_t[[:space:]]+\*schedule_app[[:space:]]*=[[:space:]]*&schedule_${sched};" "$MAIN"; then
+    echo "Error: could not point schedule_app at schedule_${sched}" >&2
+    exit 1
+  fi
+
+  SEGGER_DIR="$SEGGER_DIR" BUILD_CONFIG="$BUILD_CONFIG" make -C "$FW_DIR" gateway-net
+  cp "$BUILT_HEX" "$OUT_DIR/03app_gateway_net-${sched}.hex"
+  echo "  -> $OUT_DIR/03app_gateway_net-${sched}.hex"
+  echo
+done
+
+echo "Done."
+shasum -a 256 "$OUT_DIR"/*.hex | sed 's/^/  /'
