@@ -169,27 +169,28 @@ def on_event(event: EdgeEvent, event_data: MariNode | Frame | GatewayInfo):
     help="Send periodic packet every N seconds (0 = disabled)",
 )
 @click.option(
-    "--probe-load",
-    type=float,
-    default=15.0,
-    show_default=True,
-    help=(
-        "Share of downlink capacity the metrics probes may use, in percent. "
-        "The probe interval is derived from it once the gateway reports its "
-        "schedule, so one number holds the measurement's footprint constant "
-        "across every schedule and node count. Ignored if "
-        "--metrics-probe-interval is given."
-    ),
-)
-@click.option(
     "--metrics-probe-interval",
     "-i",
     type=float,
+    default=5.0,
+    show_default=True,
+    help=(
+        "Seconds between probes to the same node (max 10). This is the "
+        "sampling requirement: it fixes how often every node's latency and "
+        "PDR are measured, and --load fills the rest of the downlink around "
+        "it. The resulting probe share of capacity is reported in the TUI and "
+        "in the run's metrics_setup.csv."
+    ),
+)
+@click.option(
+    "--probe-load",
+    type=float,
     default=None,
     help=(
-        "Seconds between probes to the same node (max 10), overriding "
-        "--probe-load. The low-level knob: use it to reproduce a specific "
-        "cadence, e.g. -i 1 for the 2025 campaign's setting."
+        "Alternative to -i: cap the probes at this share of downlink capacity "
+        "in percent and let the cadence fall out of the gateway's schedule. "
+        "Holds the measurement footprint constant across schedules, at the "
+        "cost of a sampling rate that varies with node count."
     ),
 )
 @click.option(
@@ -204,18 +205,21 @@ def main(
     mqtt_host: str,
     load: int,
     send_periodic: float,
-    probe_load: float,
-    metrics_probe_interval: float | None,
+    metrics_probe_interval: float,
+    probe_load: float | None,
     log_dir: str,
 ):
     if not (0 <= load <= 100):
         sys.stderr.write("Error: --load must be between 0 and 100.\n")
         return
 
-    test_state = TestState(
-        load=load,
-        probe_load=probe_load,
-    )
+    # -i is the default knob; --probe-load overrides it by deriving the cadence
+    # from the schedule instead. The two answer different questions: a fixed
+    # interval fixes the sampling rate, a fixed share fixes the footprint.
+    if probe_load is not None:
+        metrics_probe_interval = None
+
+    test_state = TestState(load=load)
 
     logger = MetricsLogger(log_dir_base=log_dir, rotation_interval_minutes=1440)
 
@@ -240,14 +244,12 @@ def main(
     mari.setup_params.update(
         {
             "load_percent": load,
-            "probe_load_percent": probe_load,
             "send_periodic_s": send_periodic,
         }
     )
     if metrics_probe_interval is not None:
         mari.setup_params["metrics_probe_interval_s"] = round(metrics_probe_interval, 3)
         test_state.probe_interval = metrics_probe_interval
-        test_state.probe_load = 0.0  # an explicit -i is not a share
     logger.log_setup_parameters(mari.setup_params)
 
     stop_event = threading.Event()

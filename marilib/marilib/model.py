@@ -65,8 +65,7 @@ MARI_PROBE_STATS_MAX_LEN = 10
 class TestState:
     rate: int = 0
     load: int = 0
-    probe_load: float = 0.0  # target probe share of downlink capacity, percent
-    probe_interval: float = 0.0  # cadence derived from that share, seconds
+    probe_interval: float = 0.0  # seconds between probes to the same node
 
 
 class EdgeEvent(IntEnum):

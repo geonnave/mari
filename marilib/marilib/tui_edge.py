@@ -227,21 +227,20 @@ class MarilibTUIEdge(MarilibTUI):
             status.append(f"{self.test_state.load}% of {self.test_state.rate} pps")
             status.append("  |  ")
 
-        # Probe budget vs what the probes are actually sending. The measured
-        # rate counts retries, so it runs above target when probes are timing
-        # out - which is the case where the link is carrying more than the
-        # requested load and the latency series is being censored.
-        if self.test_state and self.test_state.probe_load > 0 and self.test_state.rate > 0:
+        # The probe cadence, and the share of downlink it actually costs. The
+        # measured rate counts retries, so it runs above the nominal
+        # nodes/interval exactly when probes are timing out - the case where the
+        # link carries more than was asked for and the latency series is being
+        # censored.
+        if self.test_state and self.test_state.probe_interval > 0 and self.test_state.rate > 0:
             measured = mari.metrics_tester.probe_rate_hz() if mari.metrics_tester else 0.0
-            measured_pct = 100.0 * measured / self.test_state.rate
-            over = measured_pct > self.test_state.probe_load * 1.25
+            nominal = len(mari.gateway.nodes) / self.test_state.probe_interval
+            over = nominal > 0 and measured > nominal * 1.25
             status.append("Probe: ")
-            status.append(
-                f"{self.test_state.probe_load:.0f}% @ {self.test_state.probe_interval:.1f}s",
-            )
+            status.append(f"{self.test_state.probe_interval:.1f}s")
             status.append(" / ")
             status.append(
-                f"{measured:.1f} pps = {measured_pct:.0f}%",
+                f"{measured:.1f} pps = {100.0 * measured / self.test_state.rate:.0f}% of downlink",
                 style="yellow" if over else "",
             )
             if over:
