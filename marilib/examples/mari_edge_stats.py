@@ -6,10 +6,32 @@ import click
 from marilib.logger import MetricsLogger
 from marilib.mari_protocol import MARI_BROADCAST_ADDRESS, Frame, DefaultPayload, DefaultPayloadType
 from marilib.marilib_edge import MarilibEdge
-from marilib.model import EdgeEvent, GatewayInfo, MariNode, TestState
+from marilib.model import SCHEDULES, EdgeEvent, GatewayInfo, MariNode, TestState
 from marilib.serial_uart import get_default_port
 from marilib.tui_edge import MarilibTUIEdge
 from marilib.communication_adapter import SerialAdapter, MQTTAdapter
+
+
+def probe_interval_for_share(mari: MarilibEdge, share_percent: float) -> float | None:
+    """Probe interval (s) that keeps the probe stream at `share_percent` of
+    downlink capacity, for a fully populated schedule.
+
+    Derived from the schedule rather than the live node count, so the cadence
+    is fixed for the whole run: a rate that drifted while nodes joined would
+    make latency samples from early and late in a window incomparable. The
+    campaign runs each schedule at capacity, so max_nodes is the right N.
+
+        interval = max_nodes / (share * downlink_capacity)
+
+    At 15%: tiny 1.0 s, medium 3.4, big 4.8, huge 7.9. Returns None until the
+    gateway has reported its schedule.
+    """
+    schedule = SCHEDULES.get(mari.gateway.info.schedule_id)
+    max_rate = mari.get_max_downlink_rate()
+    if schedule is None or max_rate == 0 or share_percent <= 0:
+        return None
+    probes_per_second = max_rate * (share_percent / 100.0)
+    return schedule["max_nodes"] / probes_per_second
 
 
 class LoadTester(threading.Thread):
@@ -146,18 +168,27 @@ def on_event(event: EdgeEvent, event_data: MariNode | Frame | GatewayInfo):
     help="Send periodic packet every N seconds (0 = disabled)",
 )
 @click.option(
+    "--probe-load",
+    type=float,
+    default=15.0,
+    show_default=True,
+    help=(
+        "Share of downlink capacity the metrics probes may use, in percent. "
+        "The probe interval is derived from it once the gateway reports its "
+        "schedule, so one number holds the measurement's footprint constant "
+        "across every schedule and node count. Ignored if "
+        "--metrics-probe-interval is given."
+    ),
+)
+@click.option(
     "--metrics-probe-interval",
     "-i",
     type=float,
-    default=5.0,
-    show_default=True,
+    default=None,
     help=(
-        "Seconds between probes to the same node (max 10). Probes are unicast "
-        "downlink traffic, so they consume the same D slots as --load: at N "
-        "nodes the probe stream offers N/interval packets/s against the "
-        "schedule's downlink capacity (huge 85.6/s, big 91.9, medium 86.6, "
-        "tiny 68.2). --load subtracts this automatically, but keep the share small "
-        "anyway, or the measurement becomes the load."
+        "Seconds between probes to the same node (max 10), overriding "
+        "--probe-load. The low-level knob: use it to reproduce a specific "
+        "cadence, e.g. -i 1 for the 2025 campaign's setting."
     ),
 )
 @click.option(
@@ -172,7 +203,8 @@ def main(
     mqtt_host: str,
     load: int,
     send_periodic: float,
-    metrics_probe_interval: float,
+    probe_load: float,
+    metrics_probe_interval: float | None,
     log_dir: str,
 ):
     if not (0 <= load <= 100):
@@ -192,15 +224,43 @@ def main(
         logger=logger,
         main_file=__file__,
         tui=MarilibTUIEdge(test_state=test_state),
-        metrics_probe_period=metrics_probe_interval,
+        # Placeholder cadence: the real one is derived below, once the gateway
+        # has reported its schedule. A zero here would leave the tester thread
+        # unstarted, and set_interval cannot start it afterwards.
+        metrics_probe_period=metrics_probe_interval or 10.0,
     )
+
+    if metrics_probe_interval is None:
+        # Wait for the schedule, then fix the cadence for the rest of the run.
+        # No probes go out meanwhile: the tester skips every cycle while the
+        # node list is empty, and nodes cannot join before the gateway is up.
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            metrics_probe_interval = probe_interval_for_share(mari, probe_load)
+            if metrics_probe_interval is not None:
+                break
+            mari.update()
+            time.sleep(0.2)
+        if metrics_probe_interval is None:
+            sys.stderr.write(
+                "Error: gateway did not report a known schedule within 10 s, so the "
+                "probe interval could not be derived. Pass -i explicitly.\n"
+            )
+            return
+        mari.metrics_tester.set_interval(metrics_probe_interval)
+        print(
+            f"[yellow]Probe interval {metrics_probe_interval:.2f} s "
+            f"= {probe_load:.0f}% of downlink on the "
+            f"{mari.gateway.info.schedule_name} schedule.[/]"
+        )
 
     # Record the knobs that define the scenario, so a run folder is
     # self-describing and does not depend on how its directory was named.
     mari.setup_params.update(
         {
             "load_percent": load,
-            "metrics_probe_interval_s": metrics_probe_interval,
+            "probe_load_percent": probe_load,
+            "metrics_probe_interval_s": round(metrics_probe_interval, 3),
             "send_periodic_s": send_periodic,
         }
     )
