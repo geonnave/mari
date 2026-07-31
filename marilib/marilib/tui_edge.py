@@ -237,7 +237,12 @@ class MarilibTUIEdge(MarilibTUI):
             nominal = len(mari.gateway.nodes) / self.test_state.probe_interval
             over = nominal > 0 and measured > nominal * 1.25
             status.append("Probe: ")
-            status.append(f"{self.test_state.probe_interval:.1f}s")
+            if self.test_state.probe_every:
+                status.append(
+                    f"{self.test_state.probe_every} sf = {self.test_state.probe_interval:.1f}s"
+                )
+            else:
+                status.append(f"{self.test_state.probe_interval:.1f}s")
             status.append(" / ")
             status.append(
                 f"{measured:.1f} pps = {100.0 * measured / self.test_state.rate:.0f}% of downlink",

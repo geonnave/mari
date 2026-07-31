@@ -66,6 +66,7 @@ class TestState:
     rate: int = 0
     load: int = 0
     probe_interval: float = 0.0  # seconds between probes to the same node
+    probe_every: int = 0  # that cadence in slotframes, 0 when set directly in seconds
 
 
 class EdgeEvent(IntEnum):

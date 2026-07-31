@@ -11,7 +11,7 @@ from marilib.mari_protocol import (
     Header,
     MetricsProbePayload,
 )
-from marilib.model import MARI_PROBE_STATS_MAX_LEN, MariGateway, MariNode, SCHEDULES
+from marilib.model import MariGateway, MariNode, SCHEDULES
 from marilib.probe_tracker import MAX_PROBE_RETRIES, PendingProbe
 
 if TYPE_CHECKING:
@@ -72,14 +72,27 @@ class MetricsTester:
         self._sent_ts: deque[float] = deque(maxlen=4096)
 
     def set_interval(self, interval: float):
-        if interval < 0 or interval > MARI_PROBE_STATS_MAX_LEN:
-            raise ValueError(f"Interval must be >= 0 and <= {MARI_PROBE_STATS_MAX_LEN}")
+        """Set the seconds between probes to the same node. 0 disables probing.
+
+        Only non-negative is enforced. There is no upper bound to enforce: a
+        long interval simply samples sparsely and widens the rolling PDR
+        window, since MARI_PROBE_STATS_MAX_LEN caps how many probe payloads are
+        retained per node, not how far apart they may be. (It was previously
+        used as a seconds ceiling, comparing a duration against a deque
+        length.)
+
+        The bound that would be worth having is at the other end - an interval
+        short enough that N/interval exceeds the gateway's downlink capacity -
+        but that depends on the schedule and the node count, neither of which
+        is known here or fixed for the run. It is reported instead: the TUI
+        shows the probe stream's live share of downlink.
+        """
+        if interval < 0:
+            raise ValueError(f"Probe interval must be >= 0, got {interval}")
         self.interval = interval
 
     def start(self):
         """Starts the metrics testing thread."""
-        if self.interval < 0 or self.interval > MARI_PROBE_STATS_MAX_LEN:
-            raise ValueError(f"Interval must be >= 0 and <= {MARI_PROBE_STATS_MAX_LEN}")
         if self.interval == 0:
             print("[yellow]Metrics tester disabled.[/]")
             return

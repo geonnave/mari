@@ -13,26 +13,28 @@ from marilib.cli.edge import mqtt_credentials
 from marilib.communication_adapter import SerialAdapter, MQTTAdapter
 
 
-def probe_interval_for_share(mari: MarilibEdge, share_percent: float) -> float | None:
-    """Probe interval (s) that keeps the probe stream at `share_percent` of
-    downlink capacity, for a fully populated schedule.
+def probe_interval_for_slotframes(mari: MarilibEdge, every: int) -> float | None:
+    """Seconds between probes to a node, for one probe every `every` slotframes.
 
-    Derived from the schedule rather than the live node count, so the cadence
-    is fixed for the whole run: a rate that drifted while nodes joined would
-    make latency samples from early and late in a window incomparable. The
-    campaign runs each schedule at capacity, so max_nodes is the right N.
+    The slotframe is the network's own clock - latency, queue depth and the
+    probe timeout are all measured in it - so a cadence expressed in slotframes
+    samples every schedule at the same rate relative to its own dynamics, which
+    is what makes latency comparable across them.
 
-        interval = max_nodes / (share * downlink_capacity)
+    It also holds the probe's share of downlink nearly constant without being
+    asked to. That share is N / (every * d_down), and N/d_down is 5.00, 4.40,
+    4.13, 4.64 for tiny, medium, big and huge - the schedules give each node an
+    uplink slot and scale downlink alongside, so the ratio barely moves. The
+    share is therefore about 4.6/every on any of them: ~23% at every=20, ~15%
+    at 30. Below about 15 the probe stream starts crowding out the traffic it
+    is supposed to be measuring.
 
-    At 15%: tiny 1.0 s, medium 3.4, big 4.8, huge 7.9. Returns None until the
-    gateway has reported its schedule.
+    Returns None until the gateway has reported a schedule we know.
     """
     schedule = SCHEDULES.get(mari.gateway.info.schedule_id)
-    max_rate = mari.get_max_downlink_rate()
-    if schedule is None or max_rate == 0 or share_percent <= 0:
+    if schedule is None or every <= 0:
         return None
-    probes_per_second = max_rate * (share_percent / 100.0)
-    return schedule["max_nodes"] / probes_per_second
+    return every * float(schedule["sf_duration"]) / 1000.0
 
 
 class LoadTester(threading.Thread):
@@ -172,25 +174,24 @@ def on_event(event: EdgeEvent, event_data: MariNode | Frame | GatewayInfo):
     "--metrics-probe-interval",
     "-i",
     type=float,
-    default=5.0,
-    show_default=True,
+    default=None,
     help=(
-        "Seconds between probes to the same node (max 10). This is the "
-        "sampling requirement: it fixes how often every node's latency and "
-        "PDR are measured, and --load fills the rest of the downlink around "
-        "it. The resulting probe share of capacity is reported in the TUI and "
-        "in the run's metrics_setup.csv."
+        "Seconds between probes to the same node, overriding --probe-every. "
+        "Wall-clock rather than slotframes: use it to reproduce a fixed "
+        "cadence across schedules, e.g. -i 1 for the 2025 campaign's setting."
     ),
 )
 @click.option(
-    "--probe-load",
-    type=float,
-    default=None,
+    "--probe-every",
+    "-k",
+    type=int,
+    default=20,
+    show_default=True,
     help=(
-        "Alternative to -i: cap the probes at this share of downlink capacity "
-        "in percent and let the cadence fall out of the gateway's schedule. "
-        "Holds the measurement footprint constant across schedules, at the "
-        "cost of a sampling rate that varies with node count."
+        "Probe each node once every K slotframes. The slotframe is the "
+        "network's own clock, so one K samples every schedule at the same rate "
+        "relative to its own dynamics and costs a near-constant ~4.6/K of "
+        "downlink capacity on any of them (~23% at K=20). Overridden by -i."
     ),
 )
 @click.option(
@@ -205,21 +206,17 @@ def main(
     mqtt_host: str,
     load: int,
     send_periodic: float,
-    metrics_probe_interval: float,
-    probe_load: float | None,
+    probe_every: int,
+    metrics_probe_interval: float | None,
     log_dir: str,
 ):
     if not (0 <= load <= 100):
         sys.stderr.write("Error: --load must be between 0 and 100.\n")
         return
 
-    # -i is the default knob; --probe-load overrides it by deriving the cadence
-    # from the schedule instead. The two answer different questions: a fixed
-    # interval fixes the sampling rate, a fixed share fixes the footprint.
-    if probe_load is not None:
-        metrics_probe_interval = None
-
-    test_state = TestState(load=load)
+    # -k is the default knob, in the network's own clock; -i overrides it with
+    # wall-clock seconds. Two knobs for one setting, high level and low.
+    test_state = TestState(load=load, probe_every=0 if metrics_probe_interval else probe_every)
 
     logger = MetricsLogger(log_dir_base=log_dir, rotation_interval_minutes=1440)
 
@@ -244,6 +241,7 @@ def main(
     mari.setup_params.update(
         {
             "load_percent": load,
+            "probe_every_slotframes": probe_every if metrics_probe_interval is None else "",
             "send_periodic_s": send_periodic,
         }
     )
@@ -278,7 +276,7 @@ def main(
             # node has joined, and a node cannot join a gateway that has not
             # beaconed its schedule.
             if metrics_probe_interval is None:
-                derived = probe_interval_for_share(mari, probe_load)
+                derived = probe_interval_for_slotframes(mari, probe_every)
                 if derived is not None:
                     metrics_probe_interval = derived
                     mari.metrics_tester.set_interval(derived)
