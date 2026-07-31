@@ -252,26 +252,39 @@ class MarilibTUIEdge(MarilibTUI):
                 status.append(" (retrying)", style="yellow")
             status.append("  |  ")
 
-        # Uplink pressure. Each node owns exactly one uplink slot per slotframe
-        # (the C schedules carry max_nodes U cells), so its budget is
-        # 1/sf_duration packets per second and the interesting number is what
-        # fraction of it the node is actually using. Measured from the frames
-        # the edge received rather than derived from the node app's send rates:
-        # the 500 ms status packet alone is 51% of the budget on the huge
-        # schedule, and that is a firmware constant this side should not assume.
+        # Raw link saturation, both directions, from frames actually counted -
+        # independent of what --load or --probe-every were set to. The settings
+        # say what was asked for; this says what the link is carrying.
+        #
+        # Downlink capacity is d_down slots per slotframe. Uplink capacity is
+        # one slot per *connected* node per slotframe (the C schedules carry
+        # exactly max_nodes U cells), so the denominator follows the node count:
+        # unassigned U slots are idle by construction and including them would
+        # hide node-level saturation behind an empty schedule.
         schedule = SCHEDULES.get(mari.gateway.info.schedule_id)
         node_count = len(mari.gateway.nodes)
-        if schedule and node_count and schedule["sf_duration"]:
+        if schedule and schedule["sf_duration"]:
             window = 10
-            up_pps = mari.gateway.stats.received_count(window, include_test_packets=True) / window
-            per_node = up_pps / node_count
-            budget = 1000.0 / float(schedule["sf_duration"])
-            used = per_node / budget
-            status.append("Uplink: ")
-            status.append(
-                f"{up_pps:.1f} pps, {per_node:.2f}/node = {used:.0%} of slot budget",
-                style="red" if used > 0.95 else ("yellow" if used > 0.8 else ""),
-            )
+            sf_s = float(schedule["sf_duration"]) / 1000.0
+            dl_pps = mari.gateway.stats.sent_count(window) / window
+            ul_pps = mari.gateway.stats.received_count(window) / window
+            dl_cap = float(schedule["d_down"]) / sf_s
+            ul_cap = node_count / sf_s if node_count else 0.0
+
+            def _sat(pps, cap):
+                if cap <= 0:
+                    return "n/a", ""
+                frac = pps / cap
+                style = "red" if frac > 0.95 else ("yellow" if frac > 0.8 else "")
+                return f"{pps:.1f}/{cap:.1f} = {frac:.0%}", style
+
+            dl_txt, dl_style = _sat(dl_pps, dl_cap)
+            ul_txt, ul_style = _sat(ul_pps, ul_cap)
+            status.append("Link: ")
+            status.append("DL ")
+            status.append(dl_txt, style=dl_style)
+            status.append("  UL ")
+            status.append(ul_txt, style=ul_style)
             status.append("  |  ")
 
         stats = mari.gateway.stats
