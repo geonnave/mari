@@ -252,6 +252,28 @@ class MarilibTUIEdge(MarilibTUI):
                 status.append(" (retrying)", style="yellow")
             status.append("  |  ")
 
+        # Uplink pressure. Each node owns exactly one uplink slot per slotframe
+        # (the C schedules carry max_nodes U cells), so its budget is
+        # 1/sf_duration packets per second and the interesting number is what
+        # fraction of it the node is actually using. Measured from the frames
+        # the edge received rather than derived from the node app's send rates:
+        # the 500 ms status packet alone is 51% of the budget on the huge
+        # schedule, and that is a firmware constant this side should not assume.
+        schedule = SCHEDULES.get(mari.gateway.info.schedule_id)
+        node_count = len(mari.gateway.nodes)
+        if schedule and node_count and schedule["sf_duration"]:
+            window = 10
+            up_pps = mari.gateway.stats.received_count(window, include_test_packets=True) / window
+            per_node = up_pps / node_count
+            budget = 1000.0 / float(schedule["sf_duration"])
+            used = per_node / budget
+            status.append("Uplink: ")
+            status.append(
+                f"{up_pps:.1f} pps, {per_node:.2f}/node = {used:.0%} of slot budget",
+                style="red" if used > 0.95 else ("yellow" if used > 0.8 else ""),
+            )
+            status.append("  |  ")
+
         stats = mari.gateway.stats
         status.append(f"Frames TX: {stats.sent_count(include_test_packets=True)}  |  ")
         status.append(f"Frames RX: {stats.received_count(include_test_packets=True)}  |  ")
