@@ -134,16 +134,40 @@ if [[ -z "$CONNECTED" ]]; then
   exit 1
 fi
 
-# No selector given: show what's on the bench and bail.
+# No selector given: show what's on the bench and bail. Listed per role, the
+# same way flashing treats them: only this role's family is a candidate, and a
+# locked board counts as one because it cannot be identified until it has been
+# recovered. Everything else is reported separately, so a missing board is
+# distinguishable from one plugged in under the other role.
 if [[ "$ALL" -eq 0 && ${#TARGETS[@]} -eq 0 ]]; then
-  echo "Connected J-Link serials:"
+  MATCHES=()
+  OTHERS=()
   while read -r snr; do
     [[ -z "$snr" ]] && continue
-    fam="$(nrfjprog --snr "$snr" --deviceversion 2>/dev/null || echo '???')"
-    printf '  %s  (%s)\n' "$snr" "$fam"
+    fam="$(nrfjprog --snr "$snr" --deviceversion 2>/dev/null || echo 'UNKNOWN')"
+    if [[ "$fam" == $EXPECT_GLOB ]]; then
+      MATCHES+=("$snr  ($fam)")
+    elif [[ "$fam" == UNKNOWN ]]; then
+      MATCHES+=("$snr  (locked or unreadable; would be recovered as $ROLE)")
+    else
+      OTHERS+=("$snr  ($fam)")
+    fi
   done <<< "$CONNECTED"
-  echo
-  echo "Re-run with --all or one/more of the serials above."
+
+  if [[ ${#MATCHES[@]} -gt 0 ]]; then
+    echo "Connected $EXPECT_GLOB devices for role '$ROLE':"
+    printf '  %s\n' "${MATCHES[@]}"
+    echo
+    echo "Re-run with --all or one/more of the serials above."
+  else
+    echo "No $EXPECT_GLOB device connected for role '$ROLE'."
+  fi
+
+  if [[ ${#OTHERS[@]} -gt 0 ]]; then
+    echo
+    echo "Not for this role (wrong family, would be skipped):"
+    printf '  %s\n' "${OTHERS[@]}"
+  fi
   exit 0
 fi
 
