@@ -13,29 +13,40 @@ from marilib.communication_adapter import SerialAdapter, MQTTAdapter
 
 
 class LoadTester(threading.Thread):
+    """Generates filler downlink traffic up to a target link occupancy.
+
+    `--load` is the share of the gateway's downlink capacity the link should
+    carry in total, metrics probes included. Probes are unicast downlink
+    packets competing for the same D slots as the filler, so the filler rate
+    is the target minus the probe rate. Without that subtraction, asking for
+    75% on the huge schedule puts 90% on the link, which measures the knee
+    rather than a loaded network.
+    """
+
     def __init__(
         self,
         mari: MarilibEdge,
         test_state: TestState,
         stop_event: threading.Event,
+        probe_interval: float = 0.0,
     ):
         super().__init__(daemon=True)
         self.mari = mari
         self.test_state = test_state
         self._stop_event = stop_event
-        self.has_rate = False
-        self.delay = None
+        self.probe_interval = probe_interval
+        self._warned_over_budget = False
 
     def run(self):
         while not self._stop_event.is_set():
-            # wait for gateway schedule to be available and try to compute rate
-            if not self.has_rate:
-                self.set_rate()
-            if self.delay is None:
-                self._stop_event.wait(0.1)  # fixed, waiting for gateway schedule to be available
+            delay = self.compute_delay()
+            if delay is None:
+                # Gateway schedule not known yet, or the probe stream already
+                # fills the budget. Re-check shortly: both can change as the
+                # gateway reports in and as nodes join or leave.
+                self._stop_event.wait(0.1)
                 continue
 
-            # once we have rate, send packets at that rate
             with self.mari.lock:
                 nodes_exist = bool(self.mari.gateway.nodes)
 
@@ -44,19 +55,53 @@ class LoadTester(threading.Thread):
                     MARI_BROADCAST_ADDRESS,
                     DefaultPayload(type_=DefaultPayloadType.METRICS_LOAD).with_filler_bytes(180),
                 )
-            self._stop_event.wait(self.delay)
+            self._stop_event.wait(delay)
 
-    def set_rate(self):
+    def probe_rate(self) -> float:
+        """Nominal probe packets/s: one per node per probe interval.
+
+        Nominal, not measured: a probe that times out is retransmitted (up to
+        MAX_PROBE_RETRIES), so under heavy loss the real probe rate is higher
+        and the link carries more than the requested share. That regime is
+        visible in the log as a non-zero pending-probe count and an effective
+        latency pinned at two slotframes.
+        """
+        if self.probe_interval <= 0:
+            return 0.0
+        with self.mari.lock:
+            node_count = len(self.mari.gateway.nodes)
+        return node_count / self.probe_interval
+
+    def compute_delay(self) -> float | None:
+        """Seconds between filler packets, or None if none should be sent.
+
+        Recomputed per packet rather than latched at startup: the probe stream
+        scales with the node count, so a rate fixed during formation would
+        overshoot the target once the network filled up.
+        """
         if self.test_state.load == 0:
-            return
+            return None
         max_rate = self.mari.get_max_downlink_rate()
         if max_rate == 0:
-            sys.stderr.write("Error computing max rate")
-            return
+            return None  # gateway schedule not reported yet
+
         self.test_state.rate = int(max_rate)
-        packets_per_second = max_rate * (self.test_state.load / 100.0)
-        self.delay = 1.0 / packets_per_second if packets_per_second > 0 else float("inf")
-        self.has_rate = True
+        target_pps = max_rate * (self.test_state.load / 100.0)
+        filler_pps = target_pps - self.probe_rate()
+
+        if filler_pps <= 0:
+            if not self._warned_over_budget:
+                self._warned_over_budget = True
+                sys.stderr.write(
+                    f"Warning: metrics probes alone offer "
+                    f"{self.probe_rate() / max_rate:.0%} of downlink capacity, at or above the "
+                    f"requested {self.test_state.load}%. Sending no filler traffic; either raise "
+                    f"--load or raise --metrics-probe-interval.\n"
+                )
+            return None
+
+        self._warned_over_budget = False
+        return 1.0 / filler_pps
 
 
 def on_event(event: EdgeEvent, event_data: MariNode | Frame | GatewayInfo):
@@ -86,7 +131,11 @@ def on_event(event: EdgeEvent, event_data: MariNode | Frame | GatewayInfo):
     type=int,
     default=0,
     show_default=True,
-    help="Load percentage to apply (0–100)",
+    help=(
+        "Target downlink occupancy in percent (0-100), metrics probes INCLUDED. "
+        "The filler rate is this target minus the probe rate, so --load 75 puts 75% "
+        "on the link rather than 75% plus whatever the probes add. 0 disables filler."
+    ),
 )
 @click.option(
     "--send-periodic",
@@ -107,7 +156,8 @@ def on_event(event: EdgeEvent, event_data: MariNode | Frame | GatewayInfo):
         "downlink traffic, so they consume the same D slots as --load: at N "
         "nodes the probe stream offers N/interval packets/s against the "
         "schedule's downlink capacity (huge 85.6/s, big 91.9, medium 86.6, "
-        "tiny 68.2). Keep that share small, or the measurement becomes the load."
+        "tiny 68.2). --load subtracts this automatically, but keep the share small "
+        "anyway, or the measurement becomes the load."
     ),
 )
 @click.option(
@@ -158,7 +208,7 @@ def main(
 
     stop_event = threading.Event()
 
-    load_tester = LoadTester(mari, test_state, stop_event)
+    load_tester = LoadTester(mari, test_state, stop_event, probe_interval=metrics_probe_interval)
     if load > 0:
         load_tester.start()
 
