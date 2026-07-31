@@ -275,6 +275,12 @@ def main(
             # placeholder rate, which costs nothing - it skips every cycle while no
             # node has joined, and a node cannot join a gateway that has not
             # beaconed its schedule.
+            # Downlink capacity, for the TUI's probe-share readout. Set here
+            # rather than only in LoadTester: at --load 0 the load tester never
+            # starts, and the probe budget is exactly what you want to see in
+            # that case.
+            test_state.rate = int(mari.get_max_downlink_rate())
+
             if metrics_probe_interval is None:
                 derived = probe_interval_for_slotframes(mari, probe_every)
                 if derived is not None:
