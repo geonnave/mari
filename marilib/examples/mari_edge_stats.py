@@ -224,7 +224,9 @@ def main(
         on_event,
         serial_interface=SerialAdapter(port),
         mqtt_interface=(
-            MQTTAdapter.from_url(mqtt_host, is_edge=True, **mqtt_credentials()) if mqtt_host else None
+            MQTTAdapter.from_url(mqtt_host, is_edge=True, **mqtt_credentials())
+            if mqtt_host
+            else None
         ),
         logger=logger,
         main_file=__file__,

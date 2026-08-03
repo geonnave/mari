@@ -239,32 +239,35 @@ class MetricsLogger:
 
         timestamp = datetime.now().isoformat()
         for node in nodes:
-            row = [
-                timestamp,
-                f"0x{node.gateway_address:016X}",
-                f"0x{node.address:016X}",
-                node.is_alive,
-                # node.stats.sent_count(include_test_packets=False),
-                # node.stats.received_count(include_test_packets=False),
-                # node.stats.sent_count(1, include_test_packets=False),
-                # node.stats.received_count(1, include_test_packets=False),
-                f"{node.stats.success_rate(30):.2%}",
-                f"{node.stats.success_rate():.2%}",
-                f"{node.pdr_downlink:.2%}",
-                f"{node.pdr_uplink:.2%}",
-                f"{self._safe_fraction(node.stats_pdr_downlink_radio()):.2%}",
-                f"{self._safe_fraction(node.stats_pdr_uplink_radio()):.2%}",
-                f"{self._safe_fraction(node.stats_pdr_downlink_uart()):.2%}",
-                f"{self._safe_fraction(node.stats_pdr_uplink_uart()):.2%}",
-                node.stats_rssi_node_dbm(),
-                node.stats_rssi_gw_dbm(),
-                f"{node.stats_avg_latency_roundtrip_node_edge_ms():.2f}",
-                f"{node.stats_avg_effective_latency_ms():.2f}",
-                node.stats_pending_probe_count(),
-                f"{node.stats_avg_latency_roundtrip_node_edge_ms():.2f}",  # FIXME!: should use cloud option
-                f"{node.stats_latest_latency_roundtrip_node_edge_ms():.2f}",
-                f"{node.stats_latest_latency_roundtrip_node_edge_ms():.2f}",  # FIXME!: should use cloud option
-            ] + self._latest_probe_fields(node)
+            row = (
+                [
+                    timestamp,
+                    f"0x{node.gateway_address:016X}",
+                    f"0x{node.address:016X}",
+                    node.is_alive,
+                    # node.stats.sent_count(include_test_packets=False),
+                    # node.stats.received_count(include_test_packets=False),
+                    # node.stats.sent_count(1, include_test_packets=False),
+                    # node.stats.received_count(1, include_test_packets=False),
+                    f"{node.stats.success_rate(30):.2%}",
+                    f"{node.stats.success_rate():.2%}",
+                    f"{node.pdr_downlink:.2%}",
+                    f"{node.pdr_uplink:.2%}",
+                    f"{self._safe_fraction(node.stats_pdr_downlink_radio()):.2%}",
+                    f"{self._safe_fraction(node.stats_pdr_uplink_radio()):.2%}",
+                    f"{self._safe_fraction(node.stats_pdr_downlink_uart()):.2%}",
+                    f"{self._safe_fraction(node.stats_pdr_uplink_uart()):.2%}",
+                    node.stats_rssi_node_dbm(),
+                    node.stats_rssi_gw_dbm(),
+                    f"{node.stats_avg_latency_roundtrip_node_edge_ms():.2f}",
+                    f"{node.stats_avg_effective_latency_ms():.2f}",
+                    node.stats_pending_probe_count(),
+                    f"{node.stats_avg_latency_roundtrip_node_edge_ms():.2f}",  # FIXME!: should use cloud option
+                    f"{node.stats_latest_latency_roundtrip_node_edge_ms():.2f}",
+                    f"{node.stats_latest_latency_roundtrip_node_edge_ms():.2f}",  # FIXME!: should use cloud option
+                ]
+                + self._latest_probe_fields(node)
+            )
             self._nodes_writer.writerow(row)
 
     def log_event(

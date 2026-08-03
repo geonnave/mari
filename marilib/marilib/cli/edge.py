@@ -72,9 +72,7 @@ def main(port: str | None, mqtt_url: str, metrics_probe_interval: float, log_dir
         on_event,
         serial_interface=SerialAdapter(port),
         mqtt_interface=(
-            MQTTAdapter.from_url(mqtt_url, is_edge=True, **mqtt_credentials())
-            if mqtt_url
-            else None
+            MQTTAdapter.from_url(mqtt_url, is_edge=True, **mqtt_credentials()) if mqtt_url else None
         ),
         logger=logger,
         tui=MarilibTUIEdge(),
