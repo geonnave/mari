@@ -45,6 +45,13 @@
 #   --hex <file>      node only:    flash this hex instead of the default
 #   --app-hex <file>  gateway only: app-core hex override
 #   --net-hex <file>  gateway only: net-core hex override
+#   --schedule <s>    gateway only: net-core image for the tiny|medium|big|huge
+#                     schedule, from the Output/schedules/ cache that
+#                     build-schedules.sh fills. The schedule is a compile-time
+#                     pointer, so naming it here is the same thing as naming
+#                     the image it produced - and the cache is only as current
+#                     as the last build-schedules.sh run, which is why a
+#                     missing image is an error rather than a rebuild.
 #   --erase-only      erase only: recover the targets and stop, no programming.
 #                     On the dual-core gateway that is both cores, which is the
 #                     pair of nrfjprog calls you would otherwise run by hand.
@@ -77,6 +84,7 @@ ROLE=""
 HEX_NODE=""
 HEX_APP=""
 HEX_NET=""
+SCHEDULE=""
 TARGETS=()
 PASSTHRU=()
 
@@ -100,6 +108,8 @@ while [[ $# -gt 0 ]]; do
     --app-hex=*)  HEX_APP="${1#--app-hex=}" ;;
     --net-hex)    shift; HEX_NET="${1:-}"; took_value=1; [[ -z "$HEX_NET" ]] && { echo "Error: --net-hex needs a path" >&2; exit 2; } ;;
     --net-hex=*)  HEX_NET="${1#--net-hex=}" ;;
+    --schedule)   shift; SCHEDULE="${1:-}"; took_value=1; [[ -z "$SCHEDULE" ]] && { echo "Error: --schedule needs one of tiny|medium|big|huge" >&2; exit 2; } ;;
+    --schedule=*) SCHEDULE="${1#--schedule=}" ;;
     -h|--help)    awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$0"; exit 0 ;;
     node|gateway|both) [[ -n "$ROLE" ]] && { echo "Error: role already set to '$ROLE'" >&2; exit 2; }; ROLE="$1" ;;
     -*)           echo "Unknown option: $1" >&2; exit 2 ;;
@@ -134,8 +144,8 @@ if [[ "$ROLE" == both ]]; then
       for a in "${PASSTHRU[@]}"; do
         if [[ "$SKIP_VALUE" -eq 1 ]]; then SKIP_VALUE=0; continue; fi
         case "$r:$a" in
-          node:--app-hex|node:--net-hex|gateway:--hex) SKIP_VALUE=1; continue ;;
-          node:--app-hex=*|node:--net-hex=*|gateway:--hex=*) continue ;;
+          node:--app-hex|node:--net-hex|node:--schedule|gateway:--hex) SKIP_VALUE=1; continue ;;
+          node:--app-hex=*|node:--net-hex=*|node:--schedule=*|gateway:--hex=*) continue ;;
         esac
         ARGS+=("$a")
       done
@@ -174,6 +184,7 @@ case "$ROLE" in
     MULTICORE=0
     MAKE_TARGET="node"
     [[ -n "$HEX_APP$HEX_NET" ]] && { echo "Error: --app-hex/--net-hex are gateway-only; use --hex for node" >&2; exit 2; }
+    [[ -n "$SCHEDULE" ]] && { echo "Error: --schedule is gateway-only; nodes adopt whatever the beacon advertises" >&2; exit 2; }
     HEX_APP="${HEX_NODE:-$FW_DIR/app/03app_node/Output/nrf52840dk/$BUILD_CONFIG/Exe/03app_node-nrf52840dk.hex}"
     HEX_NET=""
     ;;
@@ -183,6 +194,21 @@ case "$ROLE" in
     MULTICORE=1
     MAKE_TARGET="gateway"
     [[ -n "$HEX_NODE" ]] && { echo "Error: --hex is node-only; use --app-hex/--net-hex for gateway" >&2; exit 2; }
+    if [[ -n "$SCHEDULE" ]]; then
+      [[ -n "$HEX_NET" ]] && { echo "Error: --schedule and --net-hex both name the net-core image; pass one" >&2; exit 2; }
+      [[ "$DO_BUILD" -eq 1 ]] && { echo "Error: --build compiles a net core, --schedule flashes a prebuilt one; pass one" >&2; exit 2; }
+      case "$SCHEDULE" in
+        tiny|medium|big|huge) ;;
+        *) echo "Error: unknown schedule '$SCHEDULE' (tiny|medium|big|huge)" >&2; exit 2 ;;
+      esac
+      HEX_NET="$FW_DIR/Output/schedules/03app_gateway_net-$SCHEDULE.hex"
+      if [[ ! -f "$HEX_NET" ]]; then
+        echo "Error: no image for the $SCHEDULE schedule at $HEX_NET" >&2
+        echo "       Build the cache first: $FW_DIR/build-schedules.sh $SCHEDULE" >&2
+        exit 2
+      fi
+      echo "net core: $SCHEDULE schedule, built $(date -r "$HEX_NET" '+%Y-%m-%d %H:%M')"
+    fi
     HEX_APP="${HEX_APP:-$FW_DIR/app/03app_gateway_app/Output/nrf5340-app/$BUILD_CONFIG/Exe/03app_gateway_app-nrf5340-app.hex}"
     HEX_NET="${HEX_NET:-$FW_DIR/app/03app_gateway_net/Output/nrf5340-net/$BUILD_CONFIG/Exe/03app_gateway_net-nrf5340-net.hex}"
     ;;
