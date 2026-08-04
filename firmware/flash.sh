@@ -81,6 +81,11 @@ TARGETS=()
 PASSTHRU=()
 
 while [[ $# -gt 0 ]]; do
+  # A flag that takes a value consumes two argv items, and `both` replays what
+  # it did not consume itself, so the flag and its value have to be recorded
+  # together or the replayed pass sees a bare value and reads it as a serial.
+  arg="$1"
+  took_value=0
   case "$1" in
     --build)      DO_BUILD=1 ;;
     --erase-only) ERASE=1 ;;
@@ -89,11 +94,11 @@ while [[ $# -gt 0 ]]; do
     --force)      FORCE=1 ;;
     --dry-run)    DRY_RUN=1 ;;
     --all)        ALL=1 ;;
-    --hex)        shift; HEX_NODE="${1:-}"; [[ -z "$HEX_NODE" ]] && { echo "Error: --hex needs a path" >&2; exit 2; } ;;
+    --hex)        shift; HEX_NODE="${1:-}"; took_value=1; [[ -z "$HEX_NODE" ]] && { echo "Error: --hex needs a path" >&2; exit 2; } ;;
     --hex=*)      HEX_NODE="${1#--hex=}" ;;
-    --app-hex)    shift; HEX_APP="${1:-}"; [[ -z "$HEX_APP" ]] && { echo "Error: --app-hex needs a path" >&2; exit 2; } ;;
+    --app-hex)    shift; HEX_APP="${1:-}"; took_value=1; [[ -z "$HEX_APP" ]] && { echo "Error: --app-hex needs a path" >&2; exit 2; } ;;
     --app-hex=*)  HEX_APP="${1#--app-hex=}" ;;
-    --net-hex)    shift; HEX_NET="${1:-}"; [[ -z "$HEX_NET" ]] && { echo "Error: --net-hex needs a path" >&2; exit 2; } ;;
+    --net-hex)    shift; HEX_NET="${1:-}"; took_value=1; [[ -z "$HEX_NET" ]] && { echo "Error: --net-hex needs a path" >&2; exit 2; } ;;
     --net-hex=*)  HEX_NET="${1#--net-hex=}" ;;
     -h|--help)    awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$0"; exit 0 ;;
     node|gateway|both) [[ -n "$ROLE" ]] && { echo "Error: role already set to '$ROLE'" >&2; exit 2; }; ROLE="$1" ;;
@@ -101,9 +106,9 @@ while [[ $# -gt 0 ]]; do
     *)            TARGETS+=("$1") ;;
   esac
   # Everything except the role is replayed verbatim by the `both` pass below.
-  case "$1" in
+  case "$arg" in
     node|gateway|both) ;;
-    *) PASSTHRU+=("$1") ;;
+    *) if [[ "$took_value" -eq 1 ]]; then PASSTHRU+=("$arg" "$1"); else PASSTHRU+=("$arg"); fi ;;
   esac
   shift
 done
@@ -121,8 +126,22 @@ fi
 if [[ "$ROLE" == both ]]; then
   for r in gateway node; do
     echo "================================ $r ================================"
+    # An image flag belongs to one role and is an error in the other, so each
+    # pass gets the arguments that mean something to it rather than all of them.
+    ARGS=()
+    SKIP_VALUE=0
     if [[ ${#PASSTHRU[@]} -gt 0 ]]; then
-      "$0" "$r" "${PASSTHRU[@]}"
+      for a in "${PASSTHRU[@]}"; do
+        if [[ "$SKIP_VALUE" -eq 1 ]]; then SKIP_VALUE=0; continue; fi
+        case "$r:$a" in
+          node:--app-hex|node:--net-hex|gateway:--hex) SKIP_VALUE=1; continue ;;
+          node:--app-hex=*|node:--net-hex=*|gateway:--hex=*) continue ;;
+        esac
+        ARGS+=("$a")
+      done
+    fi
+    if [[ ${#ARGS[@]} -gt 0 ]]; then
+      "$0" "$r" "${ARGS[@]}"
     else
       "$0" "$r"
     fi
