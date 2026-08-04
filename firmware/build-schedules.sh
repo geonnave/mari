@@ -49,12 +49,20 @@ done
 # normally carries - comes back exactly.
 ORIGINAL="$(mktemp)"
 cp "$MAIN" "$ORIGINAL"
+BUILT=()
 restore() {
   cp "$ORIGINAL" "$MAIN" 2>/dev/null || true
   if cmp -s "$ORIGINAL" "$MAIN"; then
     rm -f "$ORIGINAL"
   else
     echo "WARNING: could not restore $MAIN. Your original is at $ORIGINAL" >&2
+  fi
+  # The restore writes main.c after the images were produced from it, so
+  # without this every image ends up older than the source it was built from,
+  # and anything comparing the two reads a fresh build as stale. Stamping them
+  # here, after the restore, is the only point at which they are last.
+  if [[ ${#BUILT[@]} -gt 0 ]]; then
+    touch "${BUILT[@]}"
   fi
 }
 trap restore EXIT
@@ -75,6 +83,7 @@ for sched in "${SCHEDULES[@]}"; do
 
   SEGGER_DIR="$SEGGER_DIR" BUILD_CONFIG="$BUILD_CONFIG" make -C "$FW_DIR" gateway-net
   cp "$BUILT_HEX" "$OUT_DIR/03app_gateway_net-${sched}.hex"
+  BUILT+=("$OUT_DIR/03app_gateway_net-${sched}.hex")
   echo "  -> $OUT_DIR/03app_gateway_net-${sched}.hex"
   echo
 done
