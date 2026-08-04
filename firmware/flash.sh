@@ -52,6 +52,11 @@
 #                     the image it produced. Refuses to flash an image older
 #                     than the firmware sources: add --build to rebuild that
 #                     one image first, or --force to flash it as it is.
+#   --net-id <hex>    gateway only: provision the network id (16-bit hex, e.g.
+#                     a000) into the net core's config page after programming,
+#                     overriding the compile-time fallback. The value is read
+#                     back and printed. Nodes have no such page; theirs is
+#                     MARI_APP_NET_ID in 03app_node/main.c
 #   --erase-only      erase only: recover the targets and stop, no programming.
 #                     On the dual-core gateway that is both cores, which is the
 #                     pair of nrfjprog calls you would otherwise run by hand.
@@ -88,7 +93,16 @@ HEX_NODE=""
 HEX_APP=""
 HEX_NET=""
 SCHEDULE=""
+NET_ID=""
 TARGETS=()
+
+# The gateway net core reads its network id from a packed
+# {magic, has_net_id, net_id} of uint32 in the last 2 KB page of its own flash,
+# falling back to a compile-time constant when the magic is absent
+# (03app_gateway_net/main.c). Writing it here is what makes one image usable on
+# any network.
+NET_CFG_ADDR="0x0103F800"
+NET_CFG_MAGIC="0x5753524D"
 PASSTHRU=()
 
 while [[ $# -gt 0 ]]; do
@@ -113,6 +127,8 @@ while [[ $# -gt 0 ]]; do
     --net-hex=*)  HEX_NET="${1#--net-hex=}" ;;
     --schedule)   shift; SCHEDULE="${1:-}"; took_value=1; [[ -z "$SCHEDULE" ]] && { echo "Error: --schedule needs one of tiny|medium|big|huge" >&2; exit 2; } ;;
     --schedule=*) SCHEDULE="${1#--schedule=}" ;;
+    --net-id)     shift; NET_ID="${1:-}"; took_value=1; [[ -z "$NET_ID" ]] && { echo "Error: --net-id needs a 16-bit hex value, e.g. a000" >&2; exit 2; } ;;
+    --net-id=*)   NET_ID="${1#--net-id=}" ;;
     -h|--help)    awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$0"; exit 0 ;;
     node|gateway|both) [[ -n "$ROLE" ]] && { echo "Error: role already set to '$ROLE'" >&2; exit 2; }; ROLE="$1" ;;
     -*)           echo "Unknown option: $1" >&2; exit 2 ;;
@@ -147,8 +163,8 @@ if [[ "$ROLE" == both ]]; then
       for a in "${PASSTHRU[@]}"; do
         if [[ "$SKIP_VALUE" -eq 1 ]]; then SKIP_VALUE=0; continue; fi
         case "$r:$a" in
-          node:--app-hex|node:--net-hex|node:--schedule|gateway:--hex) SKIP_VALUE=1; continue ;;
-          node:--app-hex=*|node:--net-hex=*|node:--schedule=*|gateway:--hex=*) continue ;;
+          node:--app-hex|node:--net-hex|node:--schedule|node:--net-id|gateway:--hex) SKIP_VALUE=1; continue ;;
+          node:--app-hex=*|node:--net-hex=*|node:--schedule=*|node:--net-id=*|gateway:--hex=*) continue ;;
         esac
         ARGS+=("$a")
       done
@@ -188,6 +204,7 @@ case "$ROLE" in
     MAKE_TARGET="node"
     [[ -n "$HEX_APP$HEX_NET" ]] && { echo "Error: --app-hex/--net-hex are gateway-only; use --hex for node" >&2; exit 2; }
     [[ -n "$SCHEDULE" ]] && { echo "Error: --schedule is gateway-only; nodes adopt whatever the beacon advertises" >&2; exit 2; }
+    [[ -n "$NET_ID" ]] && { echo "Error: --net-id is gateway-only; the node's is a compile-time constant (MARI_APP_NET_ID)" >&2; exit 2; }
     HEX_APP="${HEX_NODE:-$FW_DIR/app/03app_node/Output/nrf52840dk/$BUILD_CONFIG/Exe/03app_node-nrf52840dk.hex}"
     HEX_NET=""
     ;;
@@ -204,6 +221,17 @@ case "$ROLE" in
         *) echo "Error: unknown schedule '$SCHEDULE' (tiny|medium|big|huge)" >&2; exit 2 ;;
       esac
       HEX_NET="$FW_DIR/Output/schedules/03app_gateway_net-$SCHEDULE.hex"
+    fi
+    if [[ -n "$NET_ID" ]]; then
+      [[ "$ERASE" -eq 1 ]] && { echo "Error: --erase-only leaves no firmware to read a network id" >&2; exit 2; }
+      NET_ID="${NET_ID#0x}"; NET_ID="${NET_ID#0X}"
+      if ! [[ "$NET_ID" =~ ^[0-9a-fA-F]{1,4}$ ]]; then
+        echo "Error: --net-id takes a 16-bit hex value, e.g. a000 or 0xA000; got '$NET_ID'" >&2
+        exit 2
+      fi
+      # printf rather than ${x^^}: bash 3.2 (macOS) has no case conversion.
+      NET_ID="$(printf '%04X' "0x$NET_ID")"
+      [[ "$NET_ID" == "0000" ]] && { echo "Error: --net-id 0 is not a network" >&2; exit 2; }
     fi
     HEX_APP="${HEX_APP:-$FW_DIR/app/03app_gateway_app/Output/nrf5340-app/$BUILD_CONFIG/Exe/03app_gateway_app-nrf5340-app.hex}"
     HEX_NET="${HEX_NET:-$FW_DIR/app/03app_gateway_net/Output/nrf5340-net/$BUILD_CONFIG/Exe/03app_gateway_net-nrf5340-net.hex}"
@@ -426,6 +454,19 @@ for snr in "${TO_FLASH[@]}"; do
     # App core first, then net core - mirrors dotbot device's gateway flow.
     run_cmd nrfjprog -f "$NRF_FAMILY" -s "$snr" --coprocessor CP_APPLICATION --program "$HEX_APP" --chiperase --verify --reset
     run_cmd nrfjprog -f "$NRF_FAMILY" -s "$snr" --coprocessor CP_NETWORK --program "$HEX_NET" --chiperase --verify --reset
+    if [[ -n "$NET_ID" ]]; then
+      # The page is erased explicitly rather than relying on the --chiperase
+      # above, so provisioning behaves the same whether or not this run also
+      # reprogrammed the core. The reset at the end is what makes the net core
+      # read the id it was just given.
+      echo "  provisioning network id 0x$NET_ID ..."
+      run_cmd nrfjprog -f "$NRF_FAMILY" -s "$snr" --coprocessor CP_NETWORK --erasepage "$NET_CFG_ADDR"
+      run_cmd nrfjprog -f "$NRF_FAMILY" -s "$snr" --coprocessor CP_NETWORK --memwr "$NET_CFG_ADDR" --val "$NET_CFG_MAGIC"
+      run_cmd nrfjprog -f "$NRF_FAMILY" -s "$snr" --coprocessor CP_NETWORK --memwr "$(printf '0x%08X' $((NET_CFG_ADDR + 4)))" --val 0x00000001
+      run_cmd nrfjprog -f "$NRF_FAMILY" -s "$snr" --coprocessor CP_NETWORK --memwr "$(printf '0x%08X' $((NET_CFG_ADDR + 8)))" --val "0x0000$NET_ID"
+      run_cmd nrfjprog -f "$NRF_FAMILY" -s "$snr" --coprocessor CP_NETWORK --memrd "$NET_CFG_ADDR" --n 12
+      run_cmd nrfjprog -f "$NRF_FAMILY" -s "$snr" --coprocessor CP_NETWORK --reset
+    fi
   else
     run_cmd nrfjprog -f "$NRF_FAMILY" -s "$snr" --program "$HEX_APP" --sectorerase --verify --reset
   fi
