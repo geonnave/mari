@@ -49,16 +49,19 @@
 #                     schedule, from the Output/schedules/ cache that
 #                     build-schedules.sh fills. The schedule is a compile-time
 #                     pointer, so naming it here is the same thing as naming
-#                     the image it produced - and the cache is only as current
-#                     as the last build-schedules.sh run, which is why a
-#                     missing image is an error rather than a rebuild.
+#                     the image it produced. Refuses to flash an image older
+#                     than the firmware sources: add --build to rebuild that
+#                     one image first, or --force to flash it as it is.
 #   --erase-only      erase only: recover the targets and stop, no programming.
 #                     On the dual-core gateway that is both cores, which is the
 #                     pair of nrfjprog calls you would otherwise run by hand.
-#   --build           (re)build the role first (default: flash only, no compile)
+#   --build           (re)build first (default: flash only, no compile). With
+#                     --schedule that is the one cached image, via
+#                     build-schedules.sh, rather than the role's default output
 #   --recover         force a clean-slate recover before flashing
 #   --no-recover      skip recover even on the gateway (which recovers by default)
-#   --force           flash even if the target isn't the role's expected family
+#   --force           flash anyway when a check would stop you: a target that
+#                     isn't the role's expected family, or a stale --schedule image
 #   --dry-run         print every nrfjprog command without running it
 #
 # Env:
@@ -196,18 +199,11 @@ case "$ROLE" in
     [[ -n "$HEX_NODE" ]] && { echo "Error: --hex is node-only; use --app-hex/--net-hex for gateway" >&2; exit 2; }
     if [[ -n "$SCHEDULE" ]]; then
       [[ -n "$HEX_NET" ]] && { echo "Error: --schedule and --net-hex both name the net-core image; pass one" >&2; exit 2; }
-      [[ "$DO_BUILD" -eq 1 ]] && { echo "Error: --build compiles a net core, --schedule flashes a prebuilt one; pass one" >&2; exit 2; }
       case "$SCHEDULE" in
         tiny|medium|big|huge) ;;
         *) echo "Error: unknown schedule '$SCHEDULE' (tiny|medium|big|huge)" >&2; exit 2 ;;
       esac
       HEX_NET="$FW_DIR/Output/schedules/03app_gateway_net-$SCHEDULE.hex"
-      if [[ ! -f "$HEX_NET" ]]; then
-        echo "Error: no image for the $SCHEDULE schedule at $HEX_NET" >&2
-        echo "       Build the cache first: $FW_DIR/build-schedules.sh $SCHEDULE" >&2
-        exit 2
-      fi
-      echo "net core: $SCHEDULE schedule, built $(date -r "$HEX_NET" '+%Y-%m-%d %H:%M')"
     fi
     HEX_APP="${HEX_APP:-$FW_DIR/app/03app_gateway_app/Output/nrf5340-app/$BUILD_CONFIG/Exe/03app_gateway_app-nrf5340-app.hex}"
     HEX_NET="${HEX_NET:-$FW_DIR/app/03app_gateway_net/Output/nrf5340-net/$BUILD_CONFIG/Exe/03app_gateway_net-nrf5340-net.hex}"
@@ -277,10 +273,44 @@ else
   done
 fi
 
-# Build the role (unless skipped).
+# Build the role (unless skipped). With --schedule the target is one net-core
+# image in the cache rather than the role's default output, and only
+# build-schedules.sh knows how to produce that: it flips the compile-time
+# schedule pointer, builds, and files the result under its schedule's name.
 if [[ "$DO_BUILD" -eq 1 && "$ERASE" -eq 0 ]]; then
-  echo "Building Mari $ROLE ($BUILD_CONFIG) ..."
-  SEGGER_DIR="$SEGGER_DIR" BUILD_CONFIG="$BUILD_CONFIG" make -C "$FW_DIR" "$MAKE_TARGET"
+  if [[ -n "$SCHEDULE" ]]; then
+    echo "Building the $SCHEDULE net-core image ($BUILD_CONFIG) ..."
+    SEGGER_DIR="$SEGGER_DIR" BUILD_CONFIG="$BUILD_CONFIG" "$FW_DIR/build-schedules.sh" "$SCHEDULE"
+  else
+    echo "Building Mari $ROLE ($BUILD_CONFIG) ..."
+    SEGGER_DIR="$SEGGER_DIR" BUILD_CONFIG="$BUILD_CONFIG" make -C "$FW_DIR" "$MAKE_TARGET"
+  fi
+fi
+
+# A cached schedule image is only as current as the last build-schedules.sh
+# run, and flashing a stale one puts old firmware on the gateway without
+# leaving a trace in the measurements it goes on to produce. So this stops
+# rather than warns: a campaign runner invokes this script with its output
+# captured and shows it only on a non-zero exit, where a warning would be seen
+# by nobody.
+if [[ -n "$SCHEDULE" && "$ERASE" -eq 0 ]]; then
+  if [[ ! -f "$HEX_NET" ]]; then
+    echo "Error: no image for the $SCHEDULE schedule at $HEX_NET" >&2
+    echo "       Re-run with --build, or build it: $FW_DIR/build-schedules.sh $SCHEDULE" >&2
+    exit 1
+  fi
+  NEWER="$(find "$FW_DIR/app" "$FW_DIR/mari" "$FW_DIR/drv" "$FW_DIR/nRF" \
+                -type d -name Output -prune -o \
+                -type f \( -name '*.c' -o -name '*.h' -o -name '*.emProject' \) \
+                -newer "$HEX_NET" -print 2>/dev/null | head -n 1 || true)"
+  if [[ -n "$NEWER" && "$FORCE" -eq 0 ]]; then
+    echo "Error: the $SCHEDULE image is older than the firmware sources." >&2
+    echo "       image:  $(date -r "$HEX_NET" '+%Y-%m-%d %H:%M')  ${HEX_NET#"$FW_DIR"/}" >&2
+    echo "       source: $(date -r "$NEWER" '+%Y-%m-%d %H:%M')  ${NEWER#"$FW_DIR"/}" >&2
+    echo "       Re-run with --build to rebuild it, or --force to flash it as it is." >&2
+    exit 1
+  fi
+  echo "net core: $SCHEDULE schedule, built $(date -r "$HEX_NET" '+%Y-%m-%d %H:%M')"
 fi
 
 # Hex presence check. Skipped when erasing: there is nothing to program, and
