@@ -210,8 +210,8 @@ typedef struct {
 typedef struct {
     uint8_t id;                       // unique identifier for the schedule
     uint8_t max_nodes;                // maximum number of nodes that can be scheduled, equivalent to the number of uplink slot_durations
-    uint8_t backoff_n_min;            // minimum exponent for the backoff algorithm
-    uint8_t backoff_n_max;            // maximum exponent for the backoff algorithm
+    uint8_t backoff_n_min;            // unused; the MAC uses MARI_BACKOFF_N_MIN in association.c
+    uint8_t backoff_n_max;            // unused; the MAC uses MARI_BACKOFF_N_MAX in association.c
     size_t  n_cells;                  // number of cells in this schedule
     cell_t  cells[MARI_N_CELLS_MAX];  // cells in this schedule. NOTE(FIXME?): the first 3 cells must be beacons
 } schedule_t;
