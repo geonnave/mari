@@ -1,3 +1,4 @@
+import os
 import time
 
 import click
@@ -8,6 +9,21 @@ from marilib.communication_adapter import SerialAdapter, MQTTAdapter
 from marilib.serial_uart import get_default_port
 from marilib.tui_edge import MarilibTUIEdge
 from marilib.marilib_edge import MarilibEdge
+
+
+def mqtt_credentials() -> dict[str, str | None]:
+    """MQTT username and password from the environment, as kwargs.
+
+    Same variable names as the `dotbot` CLI, so one export serves both.
+    Returned as a dict for `**` splatting: positional unpacking collides with
+    `is_edge` at every call site. Keeping credentials out of the URL keeps
+    them out of shell history and out of any command a run sheet reproduces;
+    MQTTAdapter.from_url still accepts the `mqtts://user:pass@host` form.
+    """
+    return {
+        "username": os.environ.get("DOTBOT_MQTT_USER"),
+        "password": os.environ.get("DOTBOT_MQTT_PASS"),
+    }
 
 
 def on_event(event: EdgeEvent, event_data: MariNode | Frame):
@@ -48,17 +64,27 @@ def on_event(event: EdgeEvent, event_data: MariNode | Frame):
 def main(port: str | None, mqtt_url: str, metrics_probe_interval: float, log_dir: str):
     """A basic example of using the MarilibEdge library."""
 
+    logger = MetricsLogger(
+        log_dir_base=log_dir, rotation_interval_minutes=1440, log_interval_seconds=1.0
+    )
+
     mari = MarilibEdge(
         on_event,
         serial_interface=SerialAdapter(port),
-        mqtt_interface=MQTTAdapter.from_url(mqtt_url, is_edge=True) if mqtt_url else None,
-        logger=MetricsLogger(
-            log_dir_base=log_dir, rotation_interval_minutes=1440, log_interval_seconds=1.0
+        mqtt_interface=(
+            MQTTAdapter.from_url(mqtt_url, is_edge=True, **mqtt_credentials()) if mqtt_url else None
         ),
+        logger=logger,
         tui=MarilibTUIEdge(),
         main_file=__file__,
         metrics_probe_period=metrics_probe_interval,  # use a less frequent probe to interfere less with the main traffic
     )
+
+    # Same as mari_edge_stats.py: keep the run folder self-describing, so a
+    # measurement is identifiable from its own data rather than its directory
+    # name. No load_percent here - this CLI has no load generator.
+    mari.setup_params["metrics_probe_interval_s"] = metrics_probe_interval
+    logger.log_setup_parameters(mari.setup_params)
 
     try:
         while True:

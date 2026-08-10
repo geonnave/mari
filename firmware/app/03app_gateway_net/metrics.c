@@ -10,6 +10,7 @@
  */
 
 #include <stdbool.h>
+#include <stdio.h>
 
 #include "mr_radio.h"
 #include "mac.h"
@@ -39,12 +40,30 @@ void metrics_init(void) {
 }
 
 void metrics_add_node(uint64_t node_id) {
+    // A node already in the table keeps its slot. Adding it twice would take a
+    // second slot for the same node, and the table is only freed by
+    // metrics_clear_node, so every unmatched join leaks one. A gateway that
+    // sees more joins than leaves then fills the table, after which the search
+    // below finds nothing free: the node is never added, its tx_count and
+    // rx_count never increment again, and the probe counters read as though
+    // the gateway had stopped transmitting to a node it is still serving.
     for (uint8_t i = 0; i < MARI_N_CELLS_MAX; i++) {
-        if (metrics_vars.nodes[i].node_id == 0) {
-            metrics_vars.nodes[i].node_id = node_id;
-            break;
+        if (metrics_vars.nodes[i].node_id == node_id) {
+            return;
         }
     }
+    for (uint8_t i = 0; i < MARI_N_CELLS_MAX; i++) {
+        if (metrics_vars.nodes[i].node_id == 0) {
+            metrics_vars.nodes[i].node_id  = node_id;
+            metrics_vars.nodes[i].tx_count = 0;
+            metrics_vars.nodes[i].rx_count = 0;
+            return;
+        }
+    }
+    // Say so rather than carrying on silently: from here every metric this
+    // gateway reports for a newly joined node is wrong, and nothing else in
+    // the system can tell.
+    printf("metrics: node table full (%d), not tracking %016llX\n", MARI_N_CELLS_MAX, node_id);
 }
 
 void metrics_clear_node(uint64_t node_id) {

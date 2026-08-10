@@ -15,7 +15,6 @@ class MetricsLogger:
 
     log_dir_base: str = "logs"
     rotation_interval_minutes: int = 1440  # 1 day
-    already_logged_setup_parameters: bool = False
     log_interval_seconds: float = 1.0
     last_log_time: Dict[int, datetime] = field(default_factory=dict)
 
@@ -55,11 +54,15 @@ class MetricsLogger:
             self.active = False
 
     def log_setup_parameters(self, params: Dict[str, any] | None):
-        """Creates and writes test setup parameters to metrics_setup.csv."""
-        if not params or self.already_logged_setup_parameters:
+        """Creates and writes test setup parameters to metrics_setup.csv.
+
+        Rewrites the file on every call. Callers enrich the parameter dict as
+        facts arrive - the schedule name is only knowable once the first
+        GATEWAY_INFO lands, well after the logger is constructed - and a
+        write-once guard here silently dropped every one of those late fields.
+        """
+        if not params:
             return
-        # only log setup parameters once
-        self.already_logged_setup_parameters = True
 
         setup_path = os.path.join(self.log_dir, "metrics_setup.csv")
         with open(setup_path, "w", newline="", encoding="utf-8") as f:
@@ -128,6 +131,22 @@ class MetricsLogger:
             "avg_latency_cloud_ms",
             "last_latency_edge_ms",
             "last_latency_cloud_ms",
+            # Raw counters and ASN split from the node's latest probe, one
+            # sample per probe rather than a rolling average. Rows are written
+            # every log_interval_seconds, so consecutive rows repeat the same
+            # probe until a new one lands: dedup on edge_rx_count. The six
+            # counters make PDR exact over any window (and per node), which
+            # the rolling radio_pdr_* columns above cannot give.
+            "gw_tx_count",
+            "gw_rx_count",
+            "node_tx_count",
+            "node_rx_count",
+            "edge_tx_count",
+            "edge_rx_count",
+            "last_downlink_half_ms",
+            "last_node_processing_ms",
+            "last_uplink_half_ms",
+            "last_wire_rtt_ms",
         ]
         self._nodes_writer.writerow(nodes_header)
 
@@ -147,6 +166,13 @@ class MetricsLogger:
             self.log_gateway_metrics(gateway)
             self.log_all_nodes_metrics(nodes)
             self.last_log_time[gateway.info.address] = datetime.now()
+            # Flush at the sampling rate, as log_events.csv already does. Two
+            # reasons: a run becomes readable while it is still going, and a
+            # process that dies without running close() still leaves its data
+            # behind instead of an empty file.
+            for f in (self._gateway_file, self._nodes_file):
+                if f and not f.closed:
+                    f.flush()
 
     def log_gateway_metrics(self, gateway: MariGateway):
         if not self._log_common() or self._gateway_writer is None:
@@ -184,6 +210,28 @@ class MetricsLogger:
             return 0.0
         return 0.0 if v < 0 else min(v, 1.0)
 
+    def _latest_probe_fields(self, node: MariNode) -> list:
+        """Raw counters + ASN-decomposed latency from the node's latest probe.
+
+        Blank (not 0) when the node has no probe yet, so "no sample" stays
+        distinguishable from a genuine zero counter.
+        """
+        probe = node.probe_stats_latest
+        if probe is None:
+            return [""] * 10
+        return [
+            probe.gw_tx_count,
+            probe.gw_rx_count,
+            probe.node_tx_count,
+            probe.node_rx_count,
+            probe.edge_tx_count,
+            probe.edge_rx_count,
+            f"{probe.downlink_half_ms():.2f}",
+            f"{probe.node_processing_ms():.2f}",
+            f"{probe.uplink_half_ms():.2f}",
+            f"{probe.wire_rtt_ms():.2f}",
+        ]
+
     def log_all_nodes_metrics(self, nodes: List[MariNode]):
         """Writes metrics for all nodes, handling rotation."""
         if not self._log_common() or self._nodes_writer is None:
@@ -191,32 +239,35 @@ class MetricsLogger:
 
         timestamp = datetime.now().isoformat()
         for node in nodes:
-            row = [
-                timestamp,
-                f"0x{node.gateway_address:016X}",
-                f"0x{node.address:016X}",
-                node.is_alive,
-                # node.stats.sent_count(include_test_packets=False),
-                # node.stats.received_count(include_test_packets=False),
-                # node.stats.sent_count(1, include_test_packets=False),
-                # node.stats.received_count(1, include_test_packets=False),
-                f"{node.stats.success_rate(30):.2%}",
-                f"{node.stats.success_rate():.2%}",
-                f"{node.pdr_downlink:.2%}",
-                f"{node.pdr_uplink:.2%}",
-                f"{self._safe_fraction(node.stats_pdr_downlink_radio()):.2%}",
-                f"{self._safe_fraction(node.stats_pdr_uplink_radio()):.2%}",
-                f"{self._safe_fraction(node.stats_pdr_downlink_uart()):.2%}",
-                f"{self._safe_fraction(node.stats_pdr_uplink_uart()):.2%}",
-                node.stats_rssi_node_dbm(),
-                node.stats_rssi_gw_dbm(),
-                f"{node.stats_avg_latency_roundtrip_node_edge_ms():.2f}",
-                f"{node.stats_avg_effective_latency_ms():.2f}",
-                node.stats_pending_probe_count(),
-                f"{node.stats_avg_latency_roundtrip_node_edge_ms():.2f}",  # FIXME!: should use cloud option
-                f"{node.stats_latest_latency_roundtrip_node_edge_ms():.2f}",
-                f"{node.stats_latest_latency_roundtrip_node_edge_ms():.2f}",  # FIXME!: should use cloud option
-            ]
+            row = (
+                [
+                    timestamp,
+                    f"0x{node.gateway_address:016X}",
+                    f"0x{node.address:016X}",
+                    node.is_alive,
+                    # node.stats.sent_count(include_test_packets=False),
+                    # node.stats.received_count(include_test_packets=False),
+                    # node.stats.sent_count(1, include_test_packets=False),
+                    # node.stats.received_count(1, include_test_packets=False),
+                    f"{node.stats.success_rate(30):.2%}",
+                    f"{node.stats.success_rate():.2%}",
+                    f"{node.pdr_downlink:.2%}",
+                    f"{node.pdr_uplink:.2%}",
+                    f"{self._safe_fraction(node.stats_pdr_downlink_radio()):.2%}",
+                    f"{self._safe_fraction(node.stats_pdr_uplink_radio()):.2%}",
+                    f"{self._safe_fraction(node.stats_pdr_downlink_uart()):.2%}",
+                    f"{self._safe_fraction(node.stats_pdr_uplink_uart()):.2%}",
+                    node.stats_rssi_node_dbm(),
+                    node.stats_rssi_gw_dbm(),
+                    f"{node.stats_avg_latency_roundtrip_node_edge_ms():.2f}",
+                    f"{node.stats_avg_effective_latency_ms():.2f}",
+                    node.stats_pending_probe_count(),
+                    f"{node.stats_avg_latency_roundtrip_node_edge_ms():.2f}",  # FIXME!: should use cloud option
+                    f"{node.stats_latest_latency_roundtrip_node_edge_ms():.2f}",
+                    f"{node.stats_latest_latency_roundtrip_node_edge_ms():.2f}",  # FIXME!: should use cloud option
+                ]
+                + self._latest_probe_fields(node)
+            )
             self._nodes_writer.writerow(row)
 
     def log_event(

@@ -64,6 +64,9 @@ def test_matching_response_records_effective_and_rtt():
 
 
 def test_unmatched_response_ignored_for_rtt_stats():
+    """An unmatched (late) reply stays out of the edge's own RTT stats, but is
+    still stamped and returned so the frame forwarded to the cloud carries a
+    usable edge_rx_ts_us instead of 0."""
     tester, marilib = _make_tester()
     node = _add_test_node(marilib)
 
@@ -73,7 +76,9 @@ def test_unmatched_response_ignored_for_rtt_stats():
     )
     payload = tester.handle_response_edge(frame, rx_ts_us=60000)
 
-    assert payload is None
+    assert payload is not None
+    assert payload.edge_rx_ts_us == 60000
+    assert payload.latency_roundtrip_node_edge_ms() == pytest.approx(50.001)
     assert node.stats_avg_effective_latency_ms() == 0.0
     assert len(node.probe_stats) == 0
 

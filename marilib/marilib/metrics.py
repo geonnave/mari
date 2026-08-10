@@ -1,5 +1,6 @@
 import threading
 import time
+from collections import deque
 from typing import TYPE_CHECKING
 
 from rich import print
@@ -10,7 +11,7 @@ from marilib.mari_protocol import (
     Header,
     MetricsProbePayload,
 )
-from marilib.model import MARI_PROBE_STATS_MAX_LEN, MariGateway, MariNode, SCHEDULES
+from marilib.model import MariGateway, MariNode, SCHEDULES
 from marilib.probe_tracker import MAX_PROBE_RETRIES, PendingProbe
 
 if TYPE_CHECKING:
@@ -63,16 +64,35 @@ class MetricsTester:
         self.set_interval(interval)
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
+        # Monotonic timestamps of recent probe transmissions, for the measured
+        # send rate. Retries are counted, which is the point: the nominal rate
+        # (nodes / interval) understates the link's real probe load whenever
+        # probes are timing out. deque append/popleft are thread-safe, so the
+        # TUI can read this while the tester thread writes.
+        self._sent_ts: deque[float] = deque(maxlen=4096)
 
     def set_interval(self, interval: float):
-        if interval < 0 or interval > MARI_PROBE_STATS_MAX_LEN:
-            raise ValueError(f"Interval must be >= 0 and <= {MARI_PROBE_STATS_MAX_LEN}")
+        """Set the seconds between probes to the same node. 0 disables probing.
+
+        Only non-negative is enforced. There is no upper bound to enforce: a
+        long interval simply samples sparsely and widens the rolling PDR
+        window, since MARI_PROBE_STATS_MAX_LEN caps how many probe payloads are
+        retained per node, not how far apart they may be. (It was previously
+        used as a seconds ceiling, comparing a duration against a deque
+        length.)
+
+        The bound that would be worth having is at the other end - an interval
+        short enough that N/interval exceeds the gateway's downlink capacity -
+        but that depends on the schedule and the node count, neither of which
+        is known here or fixed for the run. It is reported instead: the TUI
+        shows the probe stream's live share of downlink.
+        """
+        if interval < 0:
+            raise ValueError(f"Probe interval must be >= 0, got {interval}")
         self.interval = interval
 
     def start(self):
         """Starts the metrics testing thread."""
-        if self.interval < 0 or self.interval > MARI_PROBE_STATS_MAX_LEN:
-            raise ValueError(f"Interval must be >= 0 and <= {MARI_PROBE_STATS_MAX_LEN}")
         if self.interval == 0:
             print("[yellow]Metrics tester disabled.[/]")
             return
@@ -153,9 +173,22 @@ class MetricsTester:
         edge_tx_ts_us = self.marilib.send_probe(node.address, payload_bytes)
         if edge_tx_ts_us is None:
             return None
+        self._sent_ts.append(time.monotonic())
         with self.marilib.lock:
             self._register_pending_probe(node, edge_tx_ts_us, edge_tx_ts_us, retry_count)
         return edge_tx_ts_us
+
+    def probe_rate_hz(self, window_s: float = 10.0) -> float:
+        """Measured probe transmissions per second over the last `window_s`.
+
+        Measured rather than nominal, so retries after a timeout show up. A
+        reading well above nodes/interval means probes are being retransmitted,
+        which puts more on the downlink than the requested probe share.
+        """
+        now = time.monotonic()
+        while self._sent_ts and now - self._sent_ts[0] > window_s:
+            self._sent_ts.popleft()
+        return len(self._sent_ts) / window_s
 
     def _send_edge_probe(self, node: MariNode) -> None:
         """Send a probe if the node has no pending one."""
@@ -244,13 +277,24 @@ class MetricsTester:
             return
 
         rx_ts = rx_ts_us if rx_ts_us is not None else self.timestamp_us()
-        pending = self._complete_pending_probe(node, payload.edge_tx_ts_us, rx_ts)
-        if pending is None:
-            # Stale reply (e.g. after timeout/retry): skip probe_stats — RTT would be bogus.
-            return None
 
+        # Stamp before matching. A reply that arrives after its timeout has no
+        # pending entry left, but it did arrive, so edge_rx_ts_us and
+        # edge_rx_count are both known and both belong on the wire: the frame
+        # is forwarded to the cloud right after this returns, and an unstamped
+        # edge_rx_ts_us of 0 makes latency_roundtrip_node_edge_ms() read as a
+        # large negative value there. Counting every reply in edge_rx_count
+        # also makes pdr_uplink_uart (edge_rx vs gw_rx) count what it names.
         payload.edge_rx_ts_us = rx_ts
         payload.edge_rx_count = node.probe_increment_rx_count()
+
+        pending = self._complete_pending_probe(node, payload.edge_tx_ts_us, rx_ts)
+        if pending is None:
+            # Late reply: check_timeouts already recorded this probe as a
+            # timeout in the effective-latency samples, so keep it out of
+            # probe_stats rather than counting one probe twice. Returned
+            # stamped so the cloud still sees its true round trip.
+            return payload
 
         node.save_probe_stats(payload)
 

@@ -22,6 +22,26 @@ if TYPE_CHECKING:
 QUEUE_DEPTH_WARN_SF = 2.0
 QUEUE_DEPTH_BAD_SF = 4.0
 
+# Per-node RSSI (dBm) thresholds for coloring the link-quality value.
+# RSSI is negative; more negative = weaker. At or below BAD we color the
+# value red (poor link), between WARN and BAD yellow, above WARN plain.
+RSSI_WARN_DBM = -60  # weaker than this -> yellow
+RSSI_BAD_DBM = -70  # weaker than this -> red
+
+
+def _rssi_cell(dbm: "float | None") -> str:
+    """Format an RSSI value (dBm) with color: red for weak links
+    (<= RSSI_BAD_DBM), yellow for marginal (<= RSSI_WARN_DBM), plain
+    otherwise. Returns '...' when no sample is available."""
+    if dbm is None:
+        return "..."
+    val = f"{dbm:.0f}"
+    if dbm <= RSSI_BAD_DBM:
+        return f"[red]{val}[/red]"
+    if dbm <= RSSI_WARN_DBM:
+        return f"[yellow]{val}[/yellow]"
+    return val
+
 
 class MarilibTUIEdge(MarilibTUI):
     """A Text-based User Interface for MarilibEdge."""
@@ -207,6 +227,66 @@ class MarilibTUIEdge(MarilibTUI):
             status.append(f"{self.test_state.load}% of {self.test_state.rate} pps")
             status.append("  |  ")
 
+        # The probe cadence, and the share of downlink it actually costs. The
+        # measured rate counts retries, so it runs above the nominal
+        # nodes/interval exactly when probes are timing out - the case where the
+        # link carries more than was asked for and the latency series is being
+        # censored.
+        if self.test_state and self.test_state.probe_interval > 0 and self.test_state.rate > 0:
+            measured = mari.metrics_tester.probe_rate_hz() if mari.metrics_tester else 0.0
+            nominal = len(mari.gateway.nodes) / self.test_state.probe_interval
+            over = nominal > 0 and measured > nominal * 1.25
+            status.append("Probe: ")
+            if self.test_state.probe_every:
+                status.append(
+                    f"{self.test_state.probe_every} sf = {self.test_state.probe_interval:.1f}s"
+                )
+            else:
+                status.append(f"{self.test_state.probe_interval:.1f}s")
+            status.append(" / ")
+            status.append(
+                f"{measured:.1f} pps = {100.0 * measured / self.test_state.rate:.0f}% of downlink",
+                style="yellow" if over else "",
+            )
+            if over:
+                status.append(" (retrying)", style="yellow")
+            status.append("  |  ")
+
+        # Raw link saturation, both directions, from frames actually counted -
+        # independent of what --load or --probe-every were set to. The settings
+        # say what was asked for; this says what the link is carrying.
+        #
+        # Downlink capacity is d_down slots per slotframe. Uplink capacity is
+        # one slot per *connected* node per slotframe (the C schedules carry
+        # exactly max_nodes U cells), so the denominator follows the node count:
+        # unassigned U slots are idle by construction and including them would
+        # hide node-level saturation behind an empty schedule.
+        schedule = SCHEDULES.get(mari.gateway.info.schedule_id)
+        node_count = len(mari.gateway.nodes)
+        if schedule and schedule["sf_duration"]:
+            window = 10
+            sf_s = float(schedule["sf_duration"]) / 1000.0
+            dl_pps = mari.gateway.stats.sent_count(window) / window
+            ul_pps = mari.gateway.stats.received_count(window) / window
+            dl_cap = float(schedule["d_down"]) / sf_s
+            ul_cap = node_count / sf_s if node_count else 0.0
+
+            def _sat(pps, cap):
+                if cap <= 0:
+                    return "n/a", ""
+                frac = pps / cap
+                style = "red" if frac > 0.95 else ("yellow" if frac > 0.8 else "")
+                return f"{pps:.1f}/{cap:.1f} = {frac:.0%}", style
+
+            dl_txt, dl_style = _sat(dl_pps, dl_cap)
+            ul_txt, ul_style = _sat(ul_pps, ul_cap)
+            status.append("Link: ")
+            status.append("DL ")
+            status.append(dl_txt, style=dl_style)
+            status.append("  UL ")
+            status.append(ul_txt, style=ul_style)
+            status.append("  |  ")
+
         stats = mari.gateway.stats
         status.append(f"Frames TX: {stats.sent_count(include_test_packets=True)}  |  ")
         status.append(f"Frames RX: {stats.received_count(include_test_packets=True)}  |  ")
@@ -345,14 +425,8 @@ class MarilibTUIEdge(MarilibTUI):
             else:
                 pdr_up_gw_edge_str = "..."
 
-            rssi_node_str = (
-                f"{node.stats_rssi_node_dbm():.0f}"
-                if node.stats_rssi_node_dbm() is not None
-                else "..."
-            )
-            rssi_gw_str = (
-                f"{node.stats_rssi_gw_dbm():.0f}" if node.stats_rssi_gw_dbm() is not None else "..."
-            )
+            rssi_node_str = _rssi_cell(node.stats_rssi_node_dbm())
+            rssi_gw_str = _rssi_cell(node.stats_rssi_gw_dbm())
 
             table.add_row(
                 f"0x{node.address:016X}",

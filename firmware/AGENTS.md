@@ -42,13 +42,65 @@ make node                                    # nrf52840dk node
 make gateway                                 # nRF5340 net-core gateway
 make all                                     # default
 make docker                                  # CI path
-
-SEGGER_DIR=/opt/segger ./flash.sh node|gateway --all|<snr...>
 ```
 
 **No automated test setup.** `app/01mari_*` directories are
 on-target experimental apps, not a unit-test suite. CI only
 verifies it compiles.
+
+## Flashing the bench (`flash.sh`)
+
+Flashes over SWD with `nrfjprog`. Flash-only by default; `--build`
+compiles first. Run with a role and no targets to list what is
+connected.
+
+```bash
+SEGGER_DIR=/opt/segger ./flash.sh <node|gateway|both> --all|<snr...>
+```
+
+- Roles map to families: `node` is nRF52840
+  (`03app_node`), `gateway` is the dual-core nRF5340
+  (`03app_gateway_app` + `03app_gateway_net`). `both` runs the
+  gateway pass then the node pass with the same options, so
+  `both --all --build` does a whole bench in one command.
+- **A run only touches its own family**, and boards of the other
+  family are reported separately, so a missing board is
+  distinguishable from one plugged in under the wrong role.
+  Flashing nodes cannot wipe a gateway. `--force` overrides.
+- Locked (APPROTECT) boards read as UNKNOWN and are auto-recovered.
+  The gateway is recovered on both cores every flash unless
+  `--no-recover`.
+- `--schedule <tiny|medium|big|huge>` flashes the net core from the
+  `build-schedules.sh` cache, and refuses an image older than the
+  sources (add `--build` to refresh just that one, `--force` to
+  flash it anyway).
+- `--net-id <hex>` writes the network id into the net core's config
+  page after programming, which is what makes one image usable on
+  any network. Nodes have no such page: theirs is
+  `MARI_APP_NET_ID` in `03app_node/main.c`.
+- `--erase-only` recovers and stops. `--dry-run` prints every
+  `nrfjprog` command without running it.
+
+## Building the schedule images (`build-schedules.sh`)
+
+The gateway's schedule is a **compile-time** pointer
+(`schedule_app` in `03app_gateway_net/main.c`), so changing it
+means a rebuild. Nodes adopt whatever the beacon advertises, so
+only the gateway is ever reflashed for a schedule change.
+
+Building takes minutes and flashing takes seconds, so build once
+and flash from the cache during a campaign:
+
+```bash
+./build-schedules.sh              # all four -> Output/schedules/
+./build-schedules.sh tiny huge    # just these
+./flash.sh gateway --all --schedule tiny
+```
+
+It edits `main.c` in place and restores it byte-for-byte via an
+EXIT trap, including through a failure. **Uncommitted edits are
+preserved, not discarded** - a bench tree normally carries the
+local net id, so that is the common case, not the exception.
 
 ## Cross-half / cross-repo coupling
 
