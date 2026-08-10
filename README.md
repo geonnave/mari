@@ -58,6 +58,35 @@ make docker      # CI path (Docker-wrapped SEGGER ES)
 
 The project uses SEGGER Embedded Studio `.emProject` files, `clang-format` v15, and `pre-commit` (root config).
 
+### Flash
+
+`firmware/flash.sh` programs connected boards over SWD with `nrfjprog`. It flashes without compiling by default; pass `--build` to build first. Run it with a role and no targets to list what is connected.
+
+```bash
+cd firmware
+./flash.sh node --all                 # every connected nRF52840 node
+./flash.sh gateway <snr>              # one nRF5340 gateway, by J-Link serial
+./flash.sh both --all --build         # build and flash the whole bench
+```
+
+A run only touches its own family (`node` is nRF52840, `gateway` is the dual-core nRF5340), and boards of the other family are listed separately, so flashing nodes cannot wipe a gateway and a board plugged in under the wrong role is easy to spot. Boards that ship with readback protection are recovered automatically.
+
+Useful options: `--net-id <hex>` provisions the gateway's network id into flash after programming (so one image works on any network), `--erase-only` recovers the targets without programming, and `--dry-run` prints the `nrfjprog` commands without running them. `./flash.sh --help` is the full list.
+
+### Schedules
+
+The gateway's schedule is chosen at **compile time** (`schedule_app` in `app/03app_gateway_net/main.c`), so switching it needs a rebuild. Nodes do not: they adopt whatever the beacon advertises, so only the gateway is reflashed.
+
+Since building takes minutes and flashing takes seconds, `build-schedules.sh` builds one gateway net-core image per schedule up front, and `flash.sh --schedule` flashes from that cache:
+
+```bash
+cd firmware
+./build-schedules.sh                  # tiny, medium, big, huge -> Output/schedules/
+./flash.sh gateway --all --schedule tiny
+```
+
+`--schedule` refuses an image older than the firmware sources; add `--build` to refresh that one image. `build-schedules.sh` restores `main.c` byte-for-byte when it finishes or fails, so local uncommitted edits survive the build.
+
 ### Example usage
 
 ```c
