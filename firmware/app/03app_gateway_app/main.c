@@ -46,6 +46,15 @@ typedef struct {
     uint8_t    tx_queue_head;
     uint8_t    tx_queue_tail;
     uint8_t    tx_queue_count;
+
+    // counters this core owns, mirrored into shared RAM for the net core to
+    // put in gateway_info
+    uint32_t rx_frames_ok;
+    uint32_t rx_hdlc_err;
+    uint32_t rx_slot_full;
+    uint32_t tx_queue_drop;
+    uint32_t ipc_r2u_lost;
+    uint8_t  ipc_r2u_seq;  ///< last radio_to_uart sequence number this core consumed
 } gateway_app_vars_t;
 
 // UART RX and TX pins
@@ -149,9 +158,31 @@ static void _uart_callback(uint8_t *buffer, size_t length) {
         return;
     }
 
+    if (_app_vars.uart_buffer_received) {
+        // the main loop has not drained the previous chunk yet; it is about to
+        // be overwritten and its bytes never reach the HDLC decoder
+        _app_vars.rx_slot_full++;
+    }
     memcpy(_app_vars.uart_buffer, buffer, length);
     _app_vars.uart_buffer_length   = length;
     _app_vars.uart_buffer_received = true;
+}
+
+// Copy this core's counters into shared RAM. The net core reads them there
+// when it builds gateway_info, so they only need to be as fresh as the
+// slotframe that carries them.
+static void _publish_stats(void) {
+    const mr_uart_rx_stats_t *uart_stats = mr_uart_rx_stats(MR_UART_INDEX);
+
+    ipc_shared_data.stats.uart_rx_bytes      = uart_stats->rx_bytes;
+    ipc_shared_data.stats.uart_rx_hw_overrun = uart_stats->hw_overrun;
+    ipc_shared_data.stats.uart_rx_hw_framing = uart_stats->hw_framing;
+    ipc_shared_data.stats.uart_rx_hw_break   = uart_stats->hw_break;
+    ipc_shared_data.stats.uart_rx_frames_ok  = _app_vars.rx_frames_ok;
+    ipc_shared_data.stats.uart_rx_hdlc_err   = _app_vars.rx_hdlc_err;
+    ipc_shared_data.stats.uart_rx_slot_full  = _app_vars.rx_slot_full;
+    ipc_shared_data.stats.uart_tx_queue_drop = _app_vars.tx_queue_drop;
+    ipc_shared_data.stats.ipc_r2u_lost       = _app_vars.ipc_r2u_lost;
 }
 
 int main(void) {
@@ -173,6 +204,8 @@ int main(void) {
     while (1) {
         __WFE();
 
+        _publish_stats();
+
         if (_app_vars.uart_buffer_received) {
             _app_vars.uart_buffer_received = false;
 
@@ -185,11 +218,14 @@ int main(void) {
                     size_t msg_len                    = mr_hdlc_decode((uint8_t *)(void *)ipc_shared_data.uart_to_radio);
                     ipc_shared_data.uart_to_radio_len = msg_len;
                     if (msg_len) {
+                        _app_vars.rx_frames_ok++;
+                        ipc_shared_data.uart_to_radio_seq++;
                         NRF_IPC_S->TASKS_SEND[IPC_CHAN_UART_TO_RADIO] = 1;
                     }
                     // we can break since we assume that the python code never sends two frames too fast in a row
                     break;
                 } else if (hdlc_state == MR_HDLC_STATE_ERROR) {
+                    _app_vars.rx_hdlc_err++;
                     break;
                 }
             }
@@ -222,9 +258,16 @@ void IPC_IRQHandler(void) {
     if (NRF_IPC_S->EVENTS_RECEIVE[IPC_CHAN_RADIO_TO_UART]) {
         NRF_IPC_S->EVENTS_RECEIVE[IPC_CHAN_RADIO_TO_UART] = 0;
 
+        // This handler is the consumer of radio_to_uart, so a jump of more
+        // than one in the producer's sequence number counts the messages the
+        // net core wrote over before they were read.
+        uint8_t seq = ipc_shared_data.radio_to_uart_seq;
+        _app_vars.ipc_r2u_lost += (uint8_t)(seq - _app_vars.ipc_r2u_seq) - 1;
+        _app_vars.ipc_r2u_seq = seq;
+
         // Enqueue the frame instead of just setting a flag
         if (!_tx_queue_enqueue((const uint8_t *)ipc_shared_data.radio_to_uart, ipc_shared_data.radio_to_uart_len)) {
-            // Queue full - could add error handling/statistics here
+            _app_vars.tx_queue_drop++;
         }
     }
 }

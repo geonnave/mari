@@ -17,6 +17,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "models.h"
+
 #if defined(NRF_APPLICATION)
 #define NRF_MUTEX NRF_MUTEX_NS
 #elif defined(NRF_NETWORK)
@@ -31,11 +33,14 @@ typedef enum {
 } ipc_channels_t;
 
 typedef struct __attribute__((packed)) {
-    bool    net_ready;                    ///< Network core is ready
-    uint8_t radio_to_uart[UINT8_MAX];     ///< Data received from the network core
-    uint8_t radio_to_uart_len;            ///< Length of the data received from the network core
-    uint8_t uart_to_radio_tx[UINT8_MAX];  ///< Data to send to the network
-    uint8_t uart_to_radio_len;            ///< Length of the data to send to the network core
+    bool                    net_ready;                    ///< Network core is ready
+    uint8_t                 radio_to_uart[UINT8_MAX];     ///< Data received from the network core
+    uint8_t                 radio_to_uart_len;            ///< Length of the data received from the network core
+    uint8_t                 radio_to_uart_seq;            ///< Bumped by the net core on every radio_to_uart write
+    uint8_t                 uart_to_radio_tx[UINT8_MAX];  ///< Data to send to the network
+    uint8_t                 uart_to_radio_len;            ///< Length of the data to send to the network core
+    uint8_t                 uart_to_radio_seq;            ///< Bumped by the app core on every uart_to_radio write
+    mr_gateway_uart_stats_t stats;                        ///< Counters reported to the host in gateway_info
 } ipc_shared_data_t;
 
 /**

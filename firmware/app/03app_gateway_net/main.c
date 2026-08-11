@@ -43,6 +43,7 @@ typedef struct {
     bool            to_uart_gateway_loop_ready;
     uint32_t        tx_count;
     uint32_t        rx_count;
+    uint8_t         ipc_u2r_seq;  ///< last uart_to_radio sequence number this core consumed
 } gateway_vars_t;
 
 typedef struct __attribute__((packed)) {
@@ -158,13 +159,23 @@ int main(void) {
             }
 
             if (send_to_uart) {
+                ipc_shared_data.radio_to_uart_seq++;
                 NRF_IPC_NS->TASKS_SEND[IPC_CHAN_RADIO_TO_UART] = 1;
             }
         }
 
         if (_app_vars.uart_to_radio_packet_ready) {
             _app_vars.uart_to_radio_packet_ready = false;
-            uint8_t packet_type                  = ipc_shared_data.uart_to_radio_tx[0];
+
+            // This loop, not the IPC handler, is the consumer of
+            // uart_to_radio_tx, so the gap has to be measured here: two IPC
+            // signals arriving between two passes leave a single buffer
+            // holding only the second message.
+            uint8_t seq                        = ipc_shared_data.uart_to_radio_seq;
+            ipc_shared_data.stats.ipc_u2r_lost += (uint8_t)(seq - _app_vars.ipc_u2r_seq) - 1;
+            _app_vars.ipc_u2r_seq              = seq;
+
+            uint8_t packet_type = ipc_shared_data.uart_to_radio_tx[0];
             if (packet_type != MARI_EDGE_DATA) {
                 printf("Invalid UART packet type: %02X\n", packet_type);
                 continue;
@@ -188,10 +199,13 @@ int main(void) {
         }
 
         if (_app_vars.to_uart_gateway_loop_ready) {
-            _app_vars.to_uart_gateway_loop_ready           = false;
-            ipc_shared_data.radio_to_uart[0]               = MARI_EDGE_GATEWAY_INFO;
-            size_t len                                     = mr_build_uart_packet_gateway_info((uint8_t *)(ipc_shared_data.radio_to_uart + 1));
-            ipc_shared_data.radio_to_uart_len              = 1 + len;
+            _app_vars.to_uart_gateway_loop_ready = false;
+            ipc_shared_data.radio_to_uart[0]     = MARI_EDGE_GATEWAY_INFO;
+            size_t len                           = mr_build_uart_packet_gateway_info(
+                (uint8_t *)(ipc_shared_data.radio_to_uart + 1),
+                (const mr_gateway_uart_stats_t *)&ipc_shared_data.stats);
+            ipc_shared_data.radio_to_uart_len = 1 + len;
+            ipc_shared_data.radio_to_uart_seq++;
             NRF_IPC_NS->TASKS_SEND[IPC_CHAN_RADIO_TO_UART] = 1;
         }
 

@@ -42,6 +42,6 @@ size_t mr_build_packet_keepalive(uint8_t *buffer, uint64_t dst);
 
 size_t mr_build_packet_beacon(uint8_t *buffer, uint16_t net_id, uint64_t asn, uint8_t remaining_capacity, uint8_t active_schedule_id);
 
-size_t mr_build_uart_packet_gateway_info(uint8_t *buffer);
+size_t mr_build_uart_packet_gateway_info(uint8_t *buffer, const mr_gateway_uart_stats_t *uart_stats);
 
 #endif

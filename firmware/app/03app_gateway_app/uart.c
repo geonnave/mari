@@ -52,15 +52,16 @@ typedef struct {
 } uart_conf_t;
 
 typedef struct {
-    uint8_t         rx_trigger_byte_ptr;    ///< pointer to the byte that triggers the RX state machine
-    uint8_t         rx_trigger_byte_saved;  ///< saved value of the byte that triggered the RX state machine (because the ptr tends to get overwritten)
-    uint8_t         rx_buffer[256];         ///< the buffer where received bytes on UART are stored
-    uart_rx_cb_t    callback;               ///< pointer to the callback function
-    uint8_t        *tx_buffer;              ///< current TX buffer
-    size_t          tx_length;              ///< total bytes to transmit
-    size_t          tx_pos;                 ///< current position in TX buffer
-    bool            tx_busy;                ///< flag indicating TX is in progress
-    uart_rx_state_t rx_state;               ///< current state of the RX state machine
+    uint8_t            rx_trigger_byte_ptr;    ///< pointer to the byte that triggers the RX state machine
+    uint8_t            rx_trigger_byte_saved;  ///< saved value of the byte that triggered the RX state machine (because the ptr tends to get overwritten)
+    uint8_t            rx_buffer[256];         ///< the buffer where received bytes on UART are stored
+    uart_rx_cb_t       callback;               ///< pointer to the callback function
+    uint8_t           *tx_buffer;              ///< current TX buffer
+    size_t             tx_length;              ///< total bytes to transmit
+    size_t             tx_pos;                 ///< current position in TX buffer
+    bool               tx_busy;                ///< flag indicating TX is in progress
+    uart_rx_state_t    rx_state;               ///< current state of the RX state machine
+    mr_uart_rx_stats_t rx_stats;               ///< cumulative RX counters
 } uart_vars_t;
 
 //=========================== variables ========================================
@@ -212,8 +213,12 @@ void mr_uart_init(uart_t uart, const mr_gpio_t *rx_pin, const mr_gpio_t *tx_pin,
 
         _uart_vars[uart].callback = callback;
 
-        // setup the RX interrupt
-        _devs[uart].p->INTENSET = (UARTE_INTENSET_ENDRX_Enabled << UARTE_INTENSET_ENDRX_Pos);
+        // setup the RX interrupt. ERROR is enabled so that a byte the internal
+        // RX FIFO had to drop shows up as ERRORSRC.OVERRUN instead of being
+        // invisible.
+        _devs[uart].p->ERRORSRC = _devs[uart].p->ERRORSRC;
+        _devs[uart].p->INTENSET = (UARTE_INTENSET_ENDRX_Enabled << UARTE_INTENSET_ENDRX_Pos) |
+                                  (UARTE_INTENSET_ERROR_Enabled << UARTE_INTENSET_ERROR_Pos);
 
         // setup the RX state machine and start receiving
         mr_uart_start_rx(uart, UART_RX_STATE_RX_TRIGGER_BYTE);
@@ -259,6 +264,10 @@ bool mr_uart_tx_busy(uart_t uart) {
     return _uart_vars[uart].tx_busy;
 }
 
+const mr_uart_rx_stats_t *mr_uart_rx_stats(uart_t uart) {
+    return &_uart_vars[uart].rx_stats;
+}
+
 void mr_uart_start_rx(uart_t uart, uart_rx_state_t state) {
     _uart_vars[uart].rx_state = state;
     if (state == UART_RX_STATE_RX_TRIGGER_BYTE) {
@@ -278,9 +287,28 @@ void mr_uart_start_rx(uart_t uart, uart_rx_state_t state) {
 extern mr_gpio_t pin_dbg_uart, pin_dbg_timer;
 static void      _uart_isr(uart_t uart) {
 
+    // a byte was lost or corrupted on the wire; ERRORSRC latches the cause
+    if (_devs[uart].p->EVENTS_ERROR) {
+        _devs[uart].p->EVENTS_ERROR = 0;
+        uint32_t errorsrc           = _devs[uart].p->ERRORSRC;
+        _devs[uart].p->ERRORSRC     = errorsrc;  // write-one-to-clear
+        if (errorsrc & (UARTE_ERRORSRC_OVERRUN_Present << UARTE_ERRORSRC_OVERRUN_Pos)) {
+            _uart_vars[uart].rx_stats.hw_overrun++;
+        }
+        if (errorsrc & (UARTE_ERRORSRC_FRAMING_Present << UARTE_ERRORSRC_FRAMING_Pos)) {
+            _uart_vars[uart].rx_stats.hw_framing++;
+        }
+        if (errorsrc & (UARTE_ERRORSRC_BREAK_Present << UARTE_ERRORSRC_BREAK_Pos)) {
+            _uart_vars[uart].rx_stats.hw_break++;
+        }
+        // ERRORSRC.PARITY has no counter: CONFIG leaves parity excluded, so the
+        // bit cannot be set.
+    }
+
     // check if the interrupt was caused by a fully received package
     if (_devs[uart].p->EVENTS_ENDRX) {
         _devs[uart].p->EVENTS_ENDRX = 0;
+        _uart_vars[uart].rx_stats.rx_bytes += _devs[uart].p->RXD.AMOUNT;
         // make sure we actually received new data
         if (_devs[uart].p->RXD.AMOUNT != 0) {
             if (_uart_vars[uart].rx_state == UART_RX_STATE_RX_TRIGGER_BYTE && _devs[uart].p->RXD.AMOUNT == 1) {
